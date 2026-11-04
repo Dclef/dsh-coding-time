@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+.probe-tmp/
+.patch-*.py
+# 本地采集数据永远不进仓库（真实台账在 ~/.dsh/coding-time）
+.coding-time-data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# 本机环境变量 / 日志 / 诊断 / 本地 JSONL 统计台账
+.env
+.env.*
+!.env.example
+.diagnostics/
+*.jsonl
+journal/
+editor-inbox/
+projects/
+locks/

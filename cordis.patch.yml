@@ -1,0 +1,11 @@
+# dsh-coding-time —「AI 编码活动时长（以及人类编写时长）」。
+#
+# 一个插件行就装整块能力：采集（lib/index.js 挂 tools/result、session/event、
+# session/flush）、本地存储、CSV 导出、Web 设置页与今日/本周仪表盘都长在这一个
+# id 上。没有第二个 cordis 插件行。
+#
+# 客户端半边（设置页 + 仪表盘）由 package.json 的 dsh.client 声明，宿主自动加载
+# client/index.js，无需在此重复。本 patch 只 insert 自己的 id，不覆盖任何 preset。
+- insert:
+    - id: dsh-coding-time
+      name: dsh-coding-time

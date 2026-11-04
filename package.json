@@ -1,0 +1,60 @@
+{
+  "name": "dsh-coding-time",
+  "displayName": "dsh-coding-time AI 编码活动时长(以及人类编写时长)（本地）",
+  "description": "Local coding-activity timing for DeepSeek Harness: wall-clock active intervals per project (cwd), AI-added/deleted line accounting from real diff metadata, and optional human-edit timing. Everything stays on this machine under ~/.dsh.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "client",
+    "locale",
+    "integrations",
+    "docs",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.14.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node -e \"const fs=require('node:fs'),cp=require('node:child_process');const walk=d=>fs.existsSync(d)?fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(d+'/'+e.name):e.name.endsWith('.js')?[d+'/'+e.name]:[]):[];const files=[...walk('lib'),...walk('client'),...walk('integrations')];if(!files.length)throw new Error('no js files to check');for(const f of files)cp.execFileSync(process.execPath,['--check',f],{stdio:'inherit'});console.log('check ok: '+files.length+' files');\""
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "coding-time",
+    "activity-tracking",
+    "time-tracking"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    },
+    "manifestVersion": 1
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  }
+}
