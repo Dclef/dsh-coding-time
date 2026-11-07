@@ -60,10 +60,9 @@ npm pack --dry-run                         # 离线核对 tarball 内容
 `/summary` HTTP 路由，不 mock `summarize`；以及本地编辑器协议用例
 （`test/editor-inbox.test.mjs`）。
 
-**最终验证记录 2026-11-05：** `npm run check` → `check ok: 9 files`；
-`node --test --test-timeout=30000 --test-reporter=spec test/*.test.mjs` →
-**174 用例 / 173 通过 / 0 失败 / 1 skip / 0 todo**（约 4.4s）。唯一 skip 是
-Windows 上的 POSIX 权限用例。请在你的平台重跑 `npm test` 取当前数字。
+**最终验证记录 2026-11-07（v0.1.0 发版）：** `npm run check` →
+`check ok: 10 files`；`npm test` → **220 用例 / 219 通过 / 0 失败 / 1 skip**。
+唯一 skip 是 Windows 上的 POSIX 权限用例。请在你的平台重跑 `npm test` 取当前数字。
 
 **验收记录 2026-11-05（本 checkout 的历史过程）：** 会话早期未安装、本地 Web
 GUI 需认证（401）；此后已安装到本机 `desktop` profile，后端与真实本地采集已实测
@@ -74,9 +73,17 @@ GUI 需认证（401）；此后已安装到本机 `desktop` profile，后端与�
 本次验收事实，不是产品约束。
 
 `npm pack --dry-run` 会把 `lib/`、`integrations/`、`client/`、`locale/`、`docs/`、
-`cordis.patch.yml`、`icon.svg`、`README.md`、`README.zh.md`、`LICENSE` 打进
-tarball（以你的版本实际执行结果为准，`package.json` 的 `files` 数组已列这些
-条目）。`test/` 仅用于开发，不在发布包内。
+`assets/`、`screenshots.json`、`cordis.patch.yml`、`icon.svg`、`README.md`、
+`README.zh.md`、`LICENSE` 打进 tarball（以你的版本实际执行结果为准，
+`package.json` 的 `files` 数组已列这些条目）。`test/` 仅用于开发，不在发布包内。
+
+已发布版本也可直接从 npm 或 GitHub Release 安装（v0.1.0 对应
+`dsh-coding-time-0.1.0.tgz`）：
+
+```
+npm install dsh-coding-time@0.1.0
+dsh plugin --profile web add 'https://github.com/Dclef/dsh-coding-time/releases/download/v0.1.0/dsh-coding-time-0.1.0.tgz'
+```
 
 ## 4. 本地编辑器接入协议（供宿主 / 编辑器集成方）
 

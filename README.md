@@ -56,6 +56,15 @@ collected" or "not connected"), never as a fabricated `0`.
 
 ## Install
 
+From npm:
+
+```
+npm install dsh-coding-time@0.1.0
+dsh plugin --profile web add dsh-coding-time
+```
+
+Or straight from the GitHub repository:
+
 ```
 dsh plugin --profile web add 'https://github.com/Dclef/dsh-coding-time'
 ```

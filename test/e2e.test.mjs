@@ -9,7 +9,20 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { beforeEach, afterEach } from 'node:test';
+
+/**
+ * 固定「今天」到 fixture 日期。
+ *
+ * 这些用例的事件时间都硬编码在 2026-11-05（01:00–08:00Z），而 summary 的
+ * `preset=today` 会用真实 `Date.now()` 算范围。若不固定时钟，跑测试的实际日期
+ * 与 fixture 不在同一天，`visible` 会把所有事件过滤掉，得到 totalSeconds=0。
+ * 每个用例后恢复真实 Date.now，避免污染其他测试文件。
+ */
+const FIXED_NOW = Date.parse('2026-11-05T12:00:00.000Z');
+const realDateNow = Date.now;
+beforeEach(() => { Date.now = () => FIXED_NOW; });
+afterEach(() => { Date.now = realDateNow; });
 
 /** 最小 cordis 上下文替身。 */
 /** 本轮创建的所有上下文：断言中途失败也要先 dispose 再清目录。 */

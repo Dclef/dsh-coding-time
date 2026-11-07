@@ -48,6 +48,15 @@ Node 内建模块；设置表单使用宿主提供的 `@deepseek-ai/schemastery`
 
 ## 安装
 
+从 npm 安装：
+
+```
+npm install dsh-coding-time@0.1.0
+dsh plugin --profile web add dsh-coding-time
+```
+
+或直接从 GitHub 仓库安装：
+
 ```
 dsh plugin --profile web add 'https://github.com/Dclef/dsh-coding-time'
 ```
