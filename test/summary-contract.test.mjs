@@ -508,3 +508,56 @@ test('E2E: 真实 stream 与单点 editor 事件：孤立点 0、unknown 不升�
         await boot1.teardown();
     }
 });
+
+// ── 用例 6：按文件分摊时长（WakaTime 式环形图数据源）真实链路 ─────────────────
+
+test('E2E: 真实工具事件产出 files[] 分摊时长，各文件之和不超过全局墙钟并集', async () => {
+    const boot1 = await boot();
+    try {
+        const { ctx, webServer, setTime, fileA } = boot1;
+        // 同一文件两次事件（间隔 5s ≤ idle），形成一条 5s 的真实 interval。
+        setTime(DAY_WED);
+        await ctx.emit('tools/result', toolResult('sA', 'c-f1', fileA), toolOutcome({ lines: { added: 2, deleted: 1 } }));
+        setTime(DAY_WED + 5_000);
+        await ctx.emit('tools/result', toolResult('sA', 'c-f2', fileA), toolOutcome({ lines: { added: 0, deleted: 0 } }));
+        await ctx.emit('session/flush');
+
+        const all = await callSummary(webServer, 'preset=all');
+        assertTopLevelShape(all);
+        assert.ok(Array.isArray(all.files), 'summary.files 必须是顶层数组');
+        assert.ok(all.files.length > 0, '有真实文件证据时应产出文件行');
+
+        let sum = 0;
+        for (const row of all.files) {
+            assert.equal(typeof row.path, 'string', '每行必须有 path');
+            assert.ok(row.path !== '', 'path 不得为空字符串');
+            assert.ok(Number.isFinite(row.totalSeconds) && row.totalSeconds > 0, '每行必须是正的有限秒数');
+            assert.equal(row.attribution, 'apportioned', '必须显式标注为按证据分摊的估计');
+            assert.ok(Number.isFinite(row.touches), 'touches 必须是有限数字');
+            sum += row.totalSeconds;
+        }
+        // 诚实性核心：分摊是「切段」不是「重复计入」——各文件之和绝不超过墙钟并集。
+        assert.ok(sum <= all.totals.totalSeconds,
+            `文件时长之和 ${sum}s 不得超过全局墙钟并集 ${all.totals.totalSeconds}s（不得乘文件数）`);
+        // 路径是相对 cwd 的证据路径（fileEvidenceOf 转换过），不是绝对路径、不含盘符。
+        for (const row of all.files) {
+            assert.doesNotMatch(row.path, /^[A-Za-z]:[\\/]/, '文件证据路径应为相对 cwd 的路径');
+        }
+    }
+    finally {
+        await boot1.teardown();
+    }
+});
+
+test('E2E: 无任何工具事件时 files[] 为空数组，不编造文件行', async () => {
+    const boot1 = await boot();
+    try {
+        const { webServer } = boot1;
+        const all = await callSummary(webServer, 'preset=all');
+        assert.ok(Array.isArray(all.files), 'files 始终应是数组（哪怕为空）');
+        assert.equal(all.files.length, 0, '没有活跃区间就不该凭空出现文件行');
+    }
+    finally {
+        await boot1.teardown();
+    }
+});

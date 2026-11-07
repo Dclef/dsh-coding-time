@@ -102,6 +102,55 @@ async function disposeTracked() {
     }
 }
 
+/**
+ * webServer 替身：记录 exact 路由。
+ * @returns 带 routes Map 的替身。
+ */
+function makeServer() {
+    return {
+        routes: new Map(),
+        register(route) {
+            this.routes.set(route.path, route.handler);
+            return () => this.routes.delete(route.path);
+        },
+    };
+}
+
+/**
+ * 直接调用一条已注册路由，返回 { status, body }。
+ *
+ * @param server - makeServer() 的替身。
+ * @param routePath - 注册时的 path。
+ * @param url - 请求 URL（含 query）。
+ * @param options - { method, body }。
+ */
+async function callRoute(server, routePath, url, options = {}) {
+    const handler = server.routes.get(routePath);
+    assert.ok(handler !== undefined, `路由 ${routePath} 未注册`);
+    const response = {
+        headersSent: false,
+        status: 0,
+        headers: {},
+        body: '',
+        writeHead(status, headers) {
+            this.status = status;
+            this.headers = headers ?? {};
+            this.headersSent = true;
+        },
+        end(body) {
+            this.body = typeof body === 'string' ? body : '';
+            this.headersSent = true;
+        },
+    };
+    await handler({
+        method: options.method ?? 'GET',
+        url,
+        headers: {},
+        body: options.body,
+    }, response);
+    return { status: response.status, headers: response.headers, body: response.body };
+}
+
 /** 建临时存储目录。 */
 async function tempDir(prefix = 'dct-') {
     return mkdtemp(path.join(os.tmpdir(), prefix));
@@ -116,15 +165,33 @@ test('真实 schemastery 可用（否则 schema 断言必须 skip）', async () 
 test('Config 必须与 normalizeConfig 同口径：越界与未知字段都要拒', async () => {
     const z = await loadRealSchema();
     if (z === null) return;
-    const { buildConfigSchema } = await import('../lib/index.js');
+    const { buildConfigSchema, unwrapVolatile, LIVE_FIELDS, COLD_FIELDS } = await import('../lib/index.js');
     const schema = buildConfigSchema(z);
     // 真实 schemastery 的 schema 是可调用的 validator（不是纯对象）。
     assert.equal(typeof schema, 'function');
-    // 默认值走 normalizeConfig 的权威结果。
-    const value = schema({});
+    // 返回值**必须保留 native volatile wrapper**（宿主 Settings 靠它识别 live 字段）。
+    const raw = schema({});
+    assert.equal(typeof raw.enabled?.get, 'function', 'live 字段必须仍是 volatile 包装');
+    assert.equal(typeof raw.heartbeatIntervalSeconds?.get, 'function');
+    // 冷字段**不能**被包装（否则会伪装成可热改）。
+    assert.equal(typeof raw.storageDirectory?.get, 'undefined', 'cold 字段绝不能被 volatile 包装');
+    // 解包后才拿到真实值（= normalizeConfig 的权威结果）。
+    const value = unwrapVolatile(raw);
     assert.equal(value.heartbeatIntervalSeconds, 60);
     assert.equal(value.idleThresholdSeconds, 180);
     assert.equal(value.enabled, true);
+    assert.equal(value.humanTracking.enabled, false);
+    // 字段分类必须与 volatile 标记一致。
+    assert.deepEqual(COLD_FIELDS.map(field => field.name), ['storageDirectory']);
+    for (const name of LIVE_FIELDS) {
+        // humanTracking 是外层 object：schemastery 禁止嵌套 volatile，标记在内层字段上。
+        if (name === 'humanTracking') {
+            assert.equal(typeof raw.humanTracking?.get, 'undefined', '外层不能标 volatile（schemastery 禁止嵌套）');
+            assert.equal(typeof raw.humanTracking?.enabled?.get, 'function', 'humanTracking.enabled 必须是 live');
+            continue;
+        }
+        assert.ok(typeof raw[name] === 'object' && typeof raw[name]?.get === 'function', `${name} 必须是 live`);
+    }
     // 越界必须被拒（schemastery 自身的范围元数据就能拒，不需要我们的 Proxy 兜底）。
     assert.throws(() => schema({ heartbeatIntervalSeconds: 2 }));
     // 未知字段必须被拒：**这条是 Proxy 用 normalizeConfig 补上的**，
@@ -422,6 +489,368 @@ test('卸载后根 scope listener 全部释放，不留泄漏', async () => {
     finally {
         // **先** dispose（串行 drain → flush → close），**再**删目录；
         // 否则仍在写盘的 store 会撞上被删的目录（ENOENT）。
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('volatile 投射：live 字段带 volatile，cold 字段不带', async () => {
+    const z = await loadRealSchema();
+    if (z === null) return;
+    const { buildConfigSchema, LIVE_FIELDS, COLD_FIELDS } = await import('../lib/index.js');
+    const schema = buildConfigSchema(z);
+    const json = schema.toJSON();
+    const refs = json.refs;
+    const dict = refs[json.uid]?.dict ?? {};
+    for (const [key, ref] of Object.entries(dict)) {
+        const node = refs[ref];
+        const isLive = node?.meta?.volatile === true;
+        const shouldBeLive = LIVE_FIELDS.includes(key) && key !== 'humanTracking';
+        if (COLD_FIELDS.some(field => field.name === key)) {
+            assert.equal(isLive, false, `冷字段 ${key} 绝不能被标 volatile`);
+            continue;
+        }
+        if (key === 'humanTracking') {
+            // 外层 object 不标 volatile；内层 enabled 才是 live。
+            assert.equal(isLive, false, 'humanTracking 外层不能标 volatile');
+            continue;
+        }
+        assert.equal(isLive, shouldBeLive, `${key} 的 volatile 标记与字段分类不一致`);
+    }
+});
+
+test('descriptor 契约：getConfigSnapshot 合并 cold 字段并给出元数据', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    const directory = await tempDir();
+    try {
+        if (z !== null) module.useSchemaProvider(z);
+        const renderConfig = { color: 'dark', enabled: true, size: 14 };
+        const descriptorValue = {
+            enabled: { get: () => false },
+            heartbeatIntervalSeconds: { get: () => 90 },
+        };
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                // 模拟真实宿主：只返回 live 子集（且带 volatile wrapper）。
+                describe: () => [{
+                    ns: 'dsh-coding-time',
+                    revision: 9,
+                    applies: 'live',
+                    value: descriptorValue,
+                }],
+                update: async () => {},
+                configure: () => {},
+            },
+        };
+        const ctx = makeContext({ services });
+        await module.apply(ctx, { storageDirectory: directory, profile: 'desc' });
+
+        // 通过路由拿真实 GET /config 响应。
+        const webServer = makeServer();
+        const routed = makeContext({ services: { ...services, webServer, connection: { requestRejection: () => undefined } } });
+        await module.apply(routed, { storageDirectory: directory, profile: 'desc2' });
+        const response = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config');
+        const body = JSON.parse(response.body);
+
+        // live 子集被正确解包并覆盖。
+        assert.equal(body.editable, true, '有 descriptor 时必须可编辑');
+        assert.equal(body.namespace, 'dsh-coding-time');
+        assert.equal(body.revision, 9);
+        assert.equal(body.config.enabled, false, 'live 值必须来自 descriptor（不是默认 true）');
+        assert.equal(body.config.heartbeatIntervalSeconds, 90);
+        // **cold 字段不被 descriptor 的 live 子集冲掉**（保留真实值）。
+        assert.equal(body.config.storageDirectory, directory);
+        assert.ok(typeof body.config.timezone === 'string' && body.config.timezone !== '');
+        // 元数据契约。
+        assert.deepEqual(body.readonlyFields, ['storageDirectory']);
+        assert.deepEqual(body.restartRequiredFields, ['storageDirectory']);
+        assert.ok(Array.isArray(body.liveFields) && body.liveFields.length > 0);
+        assert.equal(body.coldFields[0].requiresRestart, true);
+        void renderConfig;
+        await ctx.disposeAll();
+        await routed.disposeAll();
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('保存：只提交 live patch，cold 字段被拒 422', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    const directory = await tempDir();
+    try {
+        if (z !== null) module.useSchemaProvider(z);
+        const updates = [];
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                describe: () => [{ ns: 'dsh-coding-time', revision: 4, value: { enabled: { get: () => true } } }],
+                update: async (ns, patch, revision) => { updates.push({ ns, patch, revision }); },
+                configure: () => {},
+            },
+        };
+        const webServer = makeServer();
+        const ctx = makeContext({ services: { ...services, webServer, connection: { requestRejection: () => undefined } } });
+        await module.apply(ctx, { storageDirectory: directory, profile: 'save' });
+
+        // ① 正常 live 保存：只提交变动的 live 字段。
+        const okResponse = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: { heartbeatIntervalSeconds: 120 }, expectedRevision: 4 }),
+        });
+        assert.equal(okResponse.status, 200);
+        assert.equal(updates.length, 1);
+        assert.equal(updates[0].ns, 'dsh-coding-time');
+        // **只提交 live patch，不含 storageDirectory 等 cold 字段**。
+        assert.deepEqual(Object.keys(updates[0].patch), ['heartbeatIntervalSeconds']);
+        assert.equal(updates[0].patch.heartbeatIntervalSeconds, 120);
+        assert.equal(updates[0].revision, 4);
+
+        // ② 改冷字段：明确 422，且**不**调用 update。
+        const coldResponse = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: { storageDirectory: 'D:\other' } }),
+        });
+        assert.equal(coldResponse.status, 422, '冷字段必须 422');
+        const coldBody = JSON.parse(coldResponse.body);
+        assert.equal(coldBody.error.code, 'invalid_config');
+        assert.equal(coldBody.error.path, 'storageDirectory');
+        assert.equal(updates.length, 1, '冷字段绝不能被提交到 settings.update');
+
+        // ③ 没有 live 变更：也明确拒绝。
+        const emptyResponse = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: {} }),
+        });
+        assert.equal(emptyResponse.status, 422);
+        assert.equal(updates.length, 1);
+        await ctx.disposeAll();
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('保存冲突与非法值：409 / 422 语义保持', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    const directory = await tempDir();
+    try {
+        if (z !== null) module.useSchemaProvider(z);
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                describe: () => [{ ns: 'dsh-coding-time', revision: 4, value: {} }],
+                update: async () => {
+                    const error = new Error('revision stale');
+                    error.code = 'E_REVISION_CONFLICT';
+                    throw error;
+                },
+                configure: () => {},
+            },
+        };
+        const webServer = makeServer();
+        const ctx = makeContext({ services: { ...services, webServer, connection: { requestRejection: () => undefined } } });
+        await module.apply(ctx, { storageDirectory: directory, profile: 'conflict' });
+
+        // 冲突 → 409。
+        const conflict = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: { enabled: false }, expectedRevision: 1 }),
+        });
+        assert.equal(conflict.status, 409);
+        assert.equal(JSON.parse(conflict.body).error.code, 'revision_conflict');
+
+        // 非法值 → 422（带字段路径）。
+        const invalid = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: { heartbeatIntervalSeconds: 2 } }),
+        });
+        assert.equal(invalid.status, 422);
+        const invalidBody = JSON.parse(invalid.body);
+        assert.equal(invalidBody.error.code, 'invalid_config');
+        assert.equal(invalidBody.error.path, 'heartbeatIntervalSeconds');
+        await ctx.disposeAll();
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('真实 peer 产物直接传给 apply：不因 volatile wrapper 启动失败', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    assert.ok(z !== null, '本机必须有真实 schemastery（本测试不做 mock 替代）');
+    const directory = await tempDir();
+    try {
+        module.useSchemaProvider(z);
+        // **真实** schemastery 产物：live 字段是 Volatile 包装 {get()}。
+        const schemaProduct = module.buildConfigSchema(z)({});
+        // 断言这确实是带 wrapper 的真实产物（否则本测试没抓住 bug）。
+        assert.equal(typeof schemaProduct.enabled?.get, 'function', '前提：产物必须带 volatile wrapper');
+        assert.equal(typeof schemaProduct.heartbeatIntervalSeconds?.get, 'function');
+
+        // 把它**原样**当作 rawConfig 传进 apply（复现线上 FAILED 路径）。
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                describe: () => [{ ns: 'dsh-coding-time', revision: 2, applies: 'live', value: schemaProduct }],
+                update: async () => {},
+                configure: () => {},
+            },
+        };
+        const ctx = makeContext({ services });
+        ctx.fiber = { kind: 'fiber' };
+        // 不给 storageDirectory：沿用 schema 产物里的真实默认值（会经过解包）。
+        const initPromise = module.apply(ctx, { ...schemaProduct, storageDirectory: directory, profile: 'peer' });
+        await initPromise;   // 必须能完整 resolve，不能抛 ConfigError
+        // 完整 dispose 并 await（验证收尾链路也吃这份真实产物）。
+        await ctx.disposeAll();
+        assert.equal(ctx.allListenerNames().length, 0, 'dispose 后不得留 listener');
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('坏的 volatile getter 必须抛出，不静默落默认值', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    if (z !== null) module.useSchemaProvider(z);
+    const directory = await tempDir();
+    try {
+        const brokenValue = {
+            get enabled() { throw new Error('host value unreadable'); },
+        };
+        assert.throws(
+            () => module.unwrapVolatile(brokenValue),
+            error => /unreadable/.test(String(error?.message ?? '')),
+        );
+        // apply 入口同样必须失败（不能把坏值当默认值启动）。
+        const ctx = makeContext({ services: {} });
+        assert.throws(
+            () => module.apply(ctx, brokenValue),
+            error => /unreadable/.test(String(error?.message ?? '')),
+        );
+        assert.equal(ctx.allListenerNames().length, 0, '启动失败不得留 listener');
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('混合合法 live 与顶层未知键：必须 422 且绝不调用 update', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    const directory = await tempDir();
+    try {
+        if (z !== null) module.useSchemaProvider(z);
+        const updates = [];
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                describe: () => [{ ns: 'dsh-coding-time', revision: 3, value: {} }],
+                update: async (ns, patch, revision) => { updates.push({ ns, patch, revision }); },
+                configure: () => {},
+            },
+        };
+        const webServer = makeServer();
+        const ctx = makeContext({ services: { ...services, webServer, connection: { requestRejection: () => undefined } } });
+        await module.apply(ctx, { storageDirectory: directory, profile: 'mix' });
+
+        // enabled 是合法 live，unknownField 是未知顶层键。
+        const response = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: { enabled: true, unknownField: 1 } }),
+        });
+        assert.equal(response.status, 422, '未知键必须 422（不能被过滤后静默接受）');
+        const body = JSON.parse(response.body);
+        assert.equal(body.error.code, 'invalid_config');
+        assert.equal(body.error.path, 'unknownField', '错误必须指向真实未知键');
+        // **关键**：绝不能因为"过滤后只剩合法字段"就下发 update。
+        assert.equal(updates.length, 0, '校验失败时绝不可调用 settings.update');
+        await ctx.disposeAll();
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('只有合法 live 字段时才正常保存（对照组）', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    const directory = await tempDir();
+    try {
+        if (z !== null) module.useSchemaProvider(z);
+        const updates = [];
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                describe: () => [{ ns: 'dsh-coding-time', revision: 3, value: {} }],
+                update: async (ns, patch, revision) => { updates.push({ ns, patch, revision }); },
+                configure: () => {},
+            },
+        };
+        const webServer = makeServer();
+        const ctx = makeContext({ services: { ...services, webServer, connection: { requestRejection: () => undefined } } });
+        await module.apply(ctx, { storageDirectory: directory, profile: 'mix2' });
+
+        const response = await callRoute(webServer, '/plugins/dsh-coding-time/api/config', '/plugins/dsh-coding-time/api/config', {
+            method: 'POST',
+            body: JSON.stringify({ patch: { enabled: true, weekStartsOn: 0 } }),
+        });
+        assert.equal(response.status, 200);
+        assert.equal(updates.length, 1);
+        assert.deepEqual(Object.keys(updates[0].patch).sort(), ['enabled', 'weekStartsOn']);
+        await ctx.disposeAll();
+    }
+    finally {
+        await disposeTracked();
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('configure 只登记一次且不猜别的 namespace', async () => {
+    const module = await import('../lib/index.js');
+    const z = await loadRealSchema();
+    const directory = await tempDir();
+    try {
+        if (z !== null) module.useSchemaProvider(z);
+        const configureCalls = [];
+        const services = {
+            sessions: { get: id => ({ id }) },
+            workingDirectory: { get: () => directory },
+            settings: {
+                describe: () => [{ ns: 'dsh-coding-time', revision: 1, value: {} }],
+                update: async () => {},
+                configure: (presentation, owner) => { configureCalls.push({ presentation, hasOwner: owner !== undefined }); },
+            },
+        };
+        const ctx = makeContext({ services });
+        // 真实 cordis 上下文带 fiber；替身必须同样提供，否则测不到 owner 传递。
+        ctx.fiber = { kind: 'fiber' };
+        await module.apply(ctx, { storageDirectory: directory, profile: 'cfg' });
+        assert.equal(configureCalls.length, 1, 'configure 只应登记一次');
+        assert.equal(configureCalls[0].presentation.auto, true);
+        assert.equal(configureCalls[0].hasOwner, true, '必须带上本实例 owner');
+        await ctx.disposeAll();
+    }
+    finally {
         await disposeTracked();
         await rm(directory, { recursive: true, force: true });
     }

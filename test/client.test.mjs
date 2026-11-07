@@ -444,22 +444,32 @@ test('client 源码不引外部资源、不读凭据', () => {
  * 注册与释放
  * -------------------------------------------------------------------------- */
 
-test('注册 settings.section、plugins.bundle.config 与会话头入口，dispose 时全部撤回', () => {
+test('注册 settings.section、导航图标、plugins.bundle.config 与会话头入口，dispose 时全部撤回', () => {
     const { module, seats, releases, dispose } = mountPlugin();
     assert.equal(module.name, 'dsh-coding-time-client');
     assert.ok(Array.isArray(module.inject));
     assert.equal(module.inject.length, 0);
     assert.equal(typeof module.apply, 'function');
-    assert.equal(seats.length, 3);
+    assert.equal(seats.length, 4);
 
     const bySlot = new Map(seats.map(seat => [seat.name, seat]));
     sameJson([...bySlot.keys()].sort(), [
         'conversation.session.header.actions',
         'plugins.bundle.config',
         'settings.section',
+        'settings.section.icon',
     ]);
     assert.equal(bySlot.get('settings.section').id, 'dsh-coding-time');
     assert.equal(bySlot.get('settings.section').order, 64);
+    // 导航图标座位：id 必须与 settings.section 相同，宿主才会渲染（替换默认齿轮）。
+    const iconSeat = bySlot.get('settings.section.icon');
+    assert.equal(iconSeat.id, 'dsh-coding-time');
+    assert.equal(typeof iconSeat.component, 'function');
+    // 图标组件按宿主传入的 size 渲染蓝色方块，不引外部资源、符号为计时符。
+    const iconTree = iconSeat.component({ size: 16, active: true });
+    const iconText = textOf(iconTree).join(' ');
+    assert.match(iconText, /◷/);
+    assert.doesNotMatch(iconText, /undefined|NaN/);
     assert.equal(bySlot.get('plugins.bundle.config').key, 'dsh-coding-time');
     assert.equal(bySlot.get('conversation.session.header.actions').id, 'dsh-coding-time-session-header');
     for (const seat of seats) assert.equal(typeof seat.component, 'function');
@@ -467,7 +477,7 @@ test('注册 settings.section、plugins.bundle.config 与会话头入口，dispo
     // label 是 thunk：语言切换后不需要重新注册座位。
     assert.equal(bySlot.get('settings.section').label(), '编码时长');
     dispose();
-    assert.equal(releases.length, 3);
+    assert.equal(releases.length, 4);
 });
 
 test('宿主没有 slots 服务时安静降级，不抛错', () => {
@@ -679,6 +689,98 @@ test('保存只发 {patch, expectedRevision}，成功后显示已保存与新版
     assert.match(textOf(tree).join(' '), /版本 8/);
 });
 
+test('volatile Host 成功：editable=true + 冷字段元数据时热字段可编辑可保存，POST 带正确 patch/revision', async () => {
+    // Host 真实成功形状：入口可写，storageDirectory 是唯一冷字段（不可热改、需重载）。
+    const volatileBody = () => configBody({
+        editable: true,
+        readonlyFields: ['storageDirectory'],
+        restartRequiredFields: ['storageDirectory'],
+        liveFields: [
+            'enabled', 'heartbeatIntervalSeconds', 'idleThresholdSeconds', 'flushIntervalSeconds',
+            'trackAgentActivity', 'trackAiLines', 'humanTracking', 'timezone', 'weekStartsOn', 'exclude',
+        ],
+    });
+    const fetcher = makeFetch((url, init) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody());
+        if (url.includes('/config') && init?.method === 'POST') {
+            const payload = JSON.parse(init.body);
+            // 冷字段绝不能进 patch；其余热字段改动照常提交。
+            assert.equal(Object.hasOwn(payload.patch, 'storageDirectory'), false);
+            return jsonResponse(volatileBody());
+        }
+        return jsonResponse(volatileBody());
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    let tree = await settle(plugin.runtime, Section, {});
+
+    const text0 = textOf(tree).join(' ');
+    // 冷字段提示出现，但「未找到可写入口」的只读提示不得出现。
+    assert.match(text0, /部分字段需重载后生效/);
+    assert.match(text0, /本次保存不会搬移已有数据，也不会切换目录/);
+    assert.doesNotMatch(text0, /暂不可编辑：当前未找到本插件的可写配置入口/);
+
+    // 热字段仍可编辑；保存按钮可用。
+    const heartbeat = inputByField(tree, 'heartbeatIntervalSeconds');
+    assert.equal(heartbeat.props.disabled, false, '热字段在 editable=true 时不得被禁用');
+    assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, false);
+
+    heartbeat.props.onChange({ target: { value: '90' } });
+    tree = await settle(plugin.runtime, Section, {});
+    findOne(tree, byAriaLabel('保存')).props.onClick();
+    tree = await settle(plugin.runtime, Section, {});
+
+    const posts = fetcher.calls.filter(call => call.method === 'POST');
+    assert.equal(posts.length, 1, 'editable=true 时应真实发出一次保存请求');
+    assert.equal(posts[0].body, JSON.stringify({ patch: { heartbeatIntervalSeconds: 90 }, expectedRevision: 7 }));
+    assert.match(textOf(tree).join(' '), /已保存/);
+    // 冷字段 storageDirectory 是只读展示（无输入框），且提示仍在。
+    assert.match(textOf(tree).join(' '), /需重载后生效/);
+});
+
+test('字段元数据缺失/含未知名时仍按 editable 判断，不强行禁用也不强行放行', async () => {
+    // 只给 editable=true、完全不带元数据：热字段可编辑、保存可用（保持旧行为）。
+    const plain = configBody({ editable: true });
+    delete plain.readonlyFields;
+    delete plain.restartRequiredFields;
+    const fetcher = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody());
+        return jsonResponse(plain);
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, false);
+    assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, false);
+    assert.doesNotMatch(textOf(tree).join(' '), /部分字段需重载后生效/);
+});
+
+test('英文 locale 下冷字段提示与只读提示均为准确文案', async () => {
+    const volatileBody = () => configBody({
+        editable: true,
+        readonlyFields: ['storageDirectory'],
+        restartRequiredFields: ['storageDirectory'],
+    });
+    const fetcher = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody());
+        return jsonResponse(volatileBody());
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin('en');
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    const text = textOf(tree).join(' ');
+    assert.match(text, /Some fields take effect after a reload/);
+    assert.match(text, /This save does not migrate existing data or switch directories/);
+    assert.doesNotMatch(text, /no writable configuration entry was found/i);
+    assert.equal(findOne(tree, byAriaLabel('Save')).props.disabled, false);
+});
+
 test('422 显示中文字段提示并保留草稿；409 显示冲突与重新载入', async () => {
     let mode = '422';
     const fetcher = makeFetch((url, init) => {
@@ -737,6 +839,55 @@ test('editable=false：准确提示未找到可写配置入口、控件禁用、
     assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, true);
     assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, true);
     assert.equal(fetcher.calls.filter(call => call.method === 'POST').length, 0);
+});
+
+test('editable 缺失或非布尔真值（"true"/1）：fail-closed 禁用且零 POST', async () => {
+    for (const candidate of [
+        { label: '缺 editable', make: () => { const body = configBody(); delete body.editable; return body; } },
+        { label: '字符串 "true"', make: () => configBody({ editable: 'true' }) },
+        { label: '数字 1', make: () => configBody({ editable: 1 }) },
+    ]) {
+        const fetcher = defaultFetch({ config: candidate.make() });
+        hostState.fetch = fetcher;
+        hostState.document = makeDocument();
+        const plugin = mountPlugin();
+        const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+        const tree = await settle(plugin.runtime, Section, {});
+        assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, true, `${candidate.label}：保存按钮应禁用`);
+        assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, true, `${candidate.label}：热字段应禁用`);
+        assert.match(textOf(tree).join(' '), /暂不可编辑：当前未找到本插件的可写配置入口/, `${candidate.label}：应出只读提示`);
+        // 尝试点击保存（即便被禁用也要确认不发请求）。
+        findOne(tree, byAriaLabel('保存')).props.onClick?.();
+        await settle(plugin.runtime, Section, {});
+        assert.equal(fetcher.calls.filter(call => call.method === 'POST').length, 0, `${candidate.label}：零 POST`);
+    }
+});
+
+test('字段元数据只认已知配置名：未知名不误禁热字段、不误提示、不误解锁', async () => {
+    const body = configBody({
+        editable: true,
+        readonlyFields: ['heartbeatIntervalSeconds', 'notAField', '', 42, null],
+        restartRequiredFields: ['notAField', 'nope'],
+        liveFields: ['enabled', 'ghostField'],
+    });
+    const fetcher = defaultFetch({ config: body });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    const text = textOf(tree).join(' ');
+    // restartRequired 全为未知名 → 冷字段提示不得出现（不误提示）。
+    assert.doesNotMatch(text, /部分字段需重载后生效/);
+    // known 的 heartbeatIntervalSeconds 被标 readonly → 逐字段禁用。
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, true);
+    // 未知 readonly 名不得「解锁」其它热字段；其余已知热字段仍可编辑。
+    assert.equal(inputByField(tree, 'idleThresholdSeconds').props.disabled, false);
+    assert.equal(inputByField(tree, 'flushIntervalSeconds').props.disabled, false);
+    // 整体 editable=true 仍可保存，但不因未知元数据而放行被标 readonly 的字段。
+    assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, false);
+    // 只读展示的存储目录仍在页面中（未知元数据不改变其只读展示语义）。
+    assert.match(text, /settings.storage|只显示/);
 });
 
 test('editable=true 但配置读取失败：错误态 + 重试按钮，不渲染表单', async () => {
@@ -832,7 +983,7 @@ test('locale 运行时切回中文：已挂载组件跟着换文案，且不重�
     const text = textOf(tree).join(' ');
     assert.match(text, /编码活动时长/);
     assert.doesNotMatch(text, /Coding activity/);
-    assert.equal(plugin.seats.length, 3, '语言切换不应重新注册座位');
+    assert.equal(plugin.seats.length, 4, '语言切换不应重新注册座位');
     assert.equal(seat.label(), '编码时长', 'label thunk 跟随当前 locale');
 });
 
@@ -895,4 +1046,413 @@ test('__test 纯函数：URL 编码、preset 兜底、null 语义、补丁与 42
     );
 
     sameJson(t.statEntries({ records: 3, token: 'secret', note: 'x', nested: {} }), [['records', 3], ['note', 'x']], '统计里的凭据键必须被过滤');
+});
+
+
+/* -------------------------------------------------------------------------- *
+ * 授权 fail-closed：缺 editable / 非布尔真值一律不解锁
+ * -------------------------------------------------------------------------- */
+
+/** 造一个只返回给定 config 的 fetcher，并渲染设置页。 */
+async function renderSettings(configOverrides) {
+    // 传进来的若已是完整 config 回包（含 config 字段），就原样使用：
+    // 否则 configBody() 会把缺失的 editable 用默认 true 补回来，导致
+    // 「缺 editable」用例实际拿到 editable:true，测不到 fail-closed。
+    const body = configOverrides !== null && typeof configOverrides === 'object'
+        && Object.hasOwn(configOverrides, 'config')
+        ? configOverrides
+        : configBody(configOverrides);
+    const fetcher = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody());
+        return jsonResponse(body);
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    return { fetcher, plugin, tree };
+}
+
+test('缺少 editable 字段：一律不解锁（控件禁用 + 零 POST）', async () => {
+    // 直接删掉 editable：不能因为"看起来正常"就默认可写。
+    const missing = configBody();
+    delete missing.editable;
+    const { fetcher, tree } = await renderSettings(missing);
+    assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, true, '缺 editable 必须禁用保存');
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, true, '缺 editable 必须禁用字段');
+    const text = textOf(tree).join(' ');
+    assert.match(text, /暂不可编辑/, '缺 editable 必须显示未授权提示');
+    findOne(tree, byAriaLabel('保存')).props.onClick?.();
+    await tick();
+    assert.equal(fetcher.calls.filter(call => call.method === 'POST').length, 0, '缺 editable 绝不可 POST');
+});
+
+test('editable 非布尔真值（"true" / 1 / {} / []）：都不算授权', async () => {
+    for (const bogus of ['true', 1, {}, [], 'yes', '1']) {
+        const { fetcher, tree } = await renderSettings(configBody({ editable: bogus }));
+        assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, true,
+            'editable=' + JSON.stringify(bogus) + ' 必须禁用保存');
+        assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, true,
+            'editable=' + JSON.stringify(bogus) + ' 必须禁用字段');
+        findOne(tree, byAriaLabel('保存')).props.onClick?.();
+        await tick();
+        assert.equal(fetcher.calls.filter(call => call.method === 'POST').length, 0,
+            'editable=' + JSON.stringify(bogus) + ' 绝不可 POST');
+    }
+});
+
+test('editable 缺失但带冷字段元数据：仍不得因元数据而解锁', async () => {
+    const missing = configBody({
+        readonlyFields: ['storageDirectory'],
+        restartRequiredFields: ['storageDirectory'],
+        liveFields: ['enabled', 'heartbeatIntervalSeconds'],
+    });
+    delete missing.editable;
+    const { fetcher, tree } = await renderSettings(missing);
+    assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, true, '元数据不能替代 editable 授权');
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, true);
+    findOne(tree, byAriaLabel('保存')).props.onClick?.();
+    await tick();
+    assert.equal(fetcher.calls.filter(call => call.method === 'POST').length, 0);
+});
+
+/* -------------------------------------------------------------------------- *
+ * 字段元数据白名单：未知/缺失不得误禁、误提示、误放行
+ * -------------------------------------------------------------------------- */
+
+test('readonlyFields 含未知名：未知名不得连带禁用其它热字段', async () => {
+    const { tree } = await renderSettings(configBody({
+        editable: true,
+        readonlyFields: ['storageDirectory', 'unknownField', 'totallyMadeUp'],
+        restartRequiredFields: ['unknownField'],
+    }));
+    const storageInput = inputByField(tree, 'storageDirectory');
+    assert.ok(storageInput === null || storageInput.props.disabled === true, 'storageDirectory 必须只读/禁用');
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, false, '未知名不得连带禁用热字段');
+    assert.equal(inputByField(tree, 'flushIntervalSeconds').props.disabled, false);
+    assert.equal(findOne(tree, byAriaLabel('保存')).props.disabled, false);
+});
+
+test('restartRequiredFields 只含未知名：不得凭空造重载提示', async () => {
+    const { tree } = await renderSettings(configBody({
+        editable: true,
+        readonlyFields: [],
+        restartRequiredFields: ['unknownField', 'madeUpCold'],
+    }));
+    const text = textOf(tree).join(' ');
+    assert.doesNotMatch(text, /部分字段需重载后生效/, '未知冷字段不得触发重载提示');
+    assert.doesNotMatch(text, /不会立即迁移/, '未知冷字段不得触发迁移提示');
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, false);
+});
+
+test('只有 storageDirectory 这类已知冷字段才出重载提示', async () => {
+    const { tree } = await renderSettings(configBody({
+        editable: true,
+        readonlyFields: ['storageDirectory'],
+        restartRequiredFields: ['storageDirectory'],
+    }));
+    const text = textOf(tree).join(' ');
+    assert.match(text, /部分字段需重载后生效/, '已知冷字段必须出重载提示');
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, false, '热字段不受冷字段影响');
+});
+
+test('元数据是字符串而非数组：不得被误解析成授权/禁用', async () => {
+    const { tree } = await renderSettings(configBody({
+        editable: true,
+        readonlyFields: 'storageDirectory',
+        restartRequiredFields: 'storageDirectory',
+        liveFields: 'enabled',
+    }));
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, false);
+    const text = textOf(tree).join(' ');
+    assert.doesNotMatch(text, /部分字段需重载后生效/);
+});
+
+test('元数据数组含非字符串项：忽略非字符串，不崩坏', async () => {
+    const { tree } = await renderSettings(configBody({
+        editable: true,
+        readonlyFields: [null, 1, {}, 'storageDirectory'],
+    }));
+    const storageInput = inputByField(tree, 'storageDirectory');
+    assert.ok(storageInput === null || storageInput.props.disabled === true, '已知冷字段生效');
+    assert.equal(inputByField(tree, 'heartbeatIntervalSeconds').props.disabled, false);
+});
+
+/* -------------------------------------------------------------------------- *
+ * 正常 editable=true：保存精确 live patch（回归保护）
+ * -------------------------------------------------------------------------- */
+
+test('editable=true + 含未知名元数据：保存仍发精确 live patch 与 expectedRevision', async () => {
+    const fetcher = makeFetch((url, init) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody());
+        if (init?.method === 'POST') return jsonResponse(configBody({ revision: 8 }));
+        return jsonResponse(configBody({
+            editable: true,
+            readonlyFields: ['storageDirectory', 'unknownField'],
+            restartRequiredFields: ['storageDirectory', 'bogus'],
+        }));
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+
+    const input = inputByField(tree, 'heartbeatIntervalSeconds');
+    input.props.onChange?.({ target: { value: '90' } });
+    // 改字段后重新渲染，用当前 render 的 Save 按钮（避免点到旧闭包里 disabled 的按钮）。
+    const fresh = await settle(plugin.runtime, Section, {});
+    findOne(fresh, byAriaLabel('保存')).props.onClick?.();
+    await tick();
+    await tick();
+
+    const posts = fetcher.calls.filter(call => call.method === 'POST');
+    assert.equal(posts.length, 1);
+    const body = JSON.parse(posts[0].body);
+    assert.equal(body.patch.heartbeatIntervalSeconds, 90);
+    assert.equal(body.expectedRevision, 7);
+    assert.equal('storageDirectory' in body.patch, false, 'cold 字段绝不出现在 patch');
+    assert.equal('unknownField' in body.patch, false, '未知名绝不出现在 patch');
+});
+
+
+/* -------------------------------------------------------------------------- *
+ * 最近活动标签：活动区间 vs 真实工具
+ * -------------------------------------------------------------------------- */
+
+/** 用给定 recent 数组渲染设置页，返回展开后的树。 */
+async function renderWithRecent(recent) {
+    const fetcher = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody({ recent }));
+        return jsonResponse(configBody());
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    return { fetcher, plugin, tree };
+}
+
+/** 抽出「最近活动」区域里每行的标签文本。
+ *
+ * 行结构是 div[span(时间), span(标签, title=kind), span(路径)]。
+ * 每个 h() 调用只带一个 child，因此 props.children 是单节点而非数组；
+ * 这里按 span 的 title 属性（绑定的正是 item.kind）精确挑出标签 span。
+ */
+function recentLabels(tree) {
+    const section = findOne(tree, node => node.type === 'section' && node.props['data-role'] === 'recent');
+    if (section === null) return [];
+    const spans = findAll(section, node => node.type === 'span' && typeof node.props?.title === 'string');
+    // 标签 span 与路径 span 都带 title，但只有标签 span 有「style 里带 recentTool 特征」。
+    // 更稳的判据：标签 span 与其兄弟 span 同属一个 div 且它是第二个子节点。
+    const rows = findAll(section, node => node.type === 'div' && node.props?.key !== undefined);
+    return rows.map((row) => {
+        const children = node_children(row);
+        const label = children[1];
+        return label === undefined ? '' : textOf(label).join(' ').trim();
+    }).filter(text => text !== '');
+}
+
+/** 取 h() 节点的子节点序列（单 child 归一成数组）。 */
+function node_children(node) {
+    const raw = node?.props?.children;
+    if (raw === undefined || raw === null) return [];
+    return Array.isArray(raw) ? raw : [raw];
+}
+
+test('interval 无 tool：中英文都显示活动区间，绝不出现工具名或裸 interval', async () => {
+    const intervalItem = {
+        at: '2026-11-05T01:00:00.000Z',
+        project: 'e:/work/alpha',
+        sessionId: 's1',
+        kind: 'interval',
+        source: 'ai',
+        tool: null,
+        path: null,
+    };
+
+    // 中文
+    const zh = await renderWithRecent([intervalItem]);
+    const zhLabels = recentLabels(zh.tree);
+    assert.ok(zhLabels.length >= 1, '应渲染出最近活动行');
+    assert.equal(zhLabels[0], '活动区间', '中文 interval 必须显示"活动区间"');
+    const zhText = textOf(zh.tree).join(' ');
+    assert.doesNotMatch(zhText, /未知工具/, 'interval 不得显示"未知工具"');
+    assert.doesNotMatch(zhText, /\binterval\b/i, '中文界面不得暴露裸 interval 标识');
+
+    // 英文
+    const en = await renderWithRecent([intervalItem]);
+    en.plugin.setLang('en');
+    const enTree = await settle(en.plugin.runtime, en.plugin.seats.find(seat => seat.name === 'settings.section').component, {});
+    const enLabels = recentLabels(enTree);
+    assert.equal(enLabels[0], 'Activity interval', '英文 interval 必须显示 Activity interval');
+    const enText = textOf(enTree).join(' ');
+    assert.doesNotMatch(enText, /unknown tool/i, '英文 interval 不得显示 unknown tool');
+});
+
+test('真实工具名必须原样保留（ops_bash / read / write）', async () => {
+    const { tree } = await renderWithRecent([
+        { at: '2026-11-05T01:05:00.000Z', project: 'e:/work/alpha', sessionId: 's1', kind: 'exec', tool: 'ops_bash', path: null },
+        { at: '2026-11-05T01:04:00.000Z', project: 'e:/work/alpha', sessionId: 's1', kind: 'read', tool: 'read', path: 'e:/work/alpha/a.js' },
+        { at: '2026-11-05T01:03:00.000Z', project: 'e:/work/alpha', sessionId: 's1', kind: 'write', tool: 'write_file', path: 'e:/work/alpha/b.js' },
+    ]);
+    const labels = recentLabels(tree);
+    assert.ok(labels.length >= 3, '应渲染出三条最近活动');
+    // 顺序按 recent 原序（服务端已排序）。
+    assert.equal(labels[0], 'ops_bash', '真实工具名 ops_bash 必须原样展示');
+    assert.equal(labels[1], 'read', '真实工具名 read 必须原样展示');
+    assert.equal(labels[2], 'write_file', '真实工具名必须原样展示');
+    // 不得被统一替换成活动区间。
+    const text = textOf(tree).join(' ');
+    assert.doesNotMatch(text, /活动区间.*ops_bash/s, '有真实工具时不得退化为活动区间');
+});
+
+test('文件变更面板：真实 workingTree 渲染 + 行数可见 + 未知 null 显示—，工时指标不被替换', async () => {
+    const workingTree = {
+        observedAt: '2026-11-05T01:19:00.000Z',
+        truncated: false,
+        projects: [{
+            project: '/p', repoRoot: '/p', status: 'ok', observedAt: '2026-11-05T01:19:00.000Z',
+            truncated: false,
+            files: [
+                { path: 'src/a.js', oldPath: null, status: 'modified', indexStatus: ' ', worktreeStatus: 'M', addedLines: 5, deletedLines: 2, binary: false },
+                { path: 'new.md', oldPath: null, status: 'untracked', indexStatus: '?', worktreeStatus: '?', addedLines: null, deletedLines: null, binary: false },
+            ],
+        }],
+    };
+    const fetcher = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody({ workingTree }));
+        return jsonResponse(configBody());
+    });
+    hostState.fetch = fetcher;
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+
+    const panel = findOne(tree, node => node.type === 'section' && node.props['data-role'] === 'working-tree');
+    assert.ok(panel !== null, '文件变更面板必须真实挂载');
+    const panelText = textOf(panel).join(' ');
+    assert.match(panelText, /文件变更/, '本地化标题');
+    assert.match(panelText, /src\/a\.js/, '真实修改文件路径可见');
+    assert.match(panelText, /\+5/, '真实 +5 行数可见');
+    assert.match(panelText, /−2/, '真实 -2 行数可见');
+    assert.match(panelText, /new\.md/, '未跟踪文件路径可见');
+    assert.match(panelText, /未跟踪/, '状态本地化');
+    // 未知行数必须是 —，绝不冒充 0。
+    assert.match(panelText, /—/, 'null 行数显示 —');
+    assert.doesNotMatch(panelText, /\+0|−0|0 \/ 0/, '不得把未知行数写成 0');
+    // 工时指标仍来自 summary.totals（3600s），不被 Git 行数替换或相加。
+    assert.match(panelText, /当前 Git 工作区差异，不受工时日期范围影响/, '提示不受工时范围影响');
+    assert.match(textOf(tree).join(' '), /1 小时 0 分/, '区间总工时必须保持原值');
+});
+
+test('无名 evidence：中性活动记录，不伪造成工具名', async () => {
+    const { tree } = await renderWithRecent([
+        // evidence 且无 tool：应显示中性标签，不是工具名、也不是"活动区间"。
+        { at: '2026-11-05T01:02:00.000Z', project: 'e:/work/alpha', sessionId: 's1', kind: 'evidence', source: 'ai', tool: null, path: null },
+        // 连 kind 都没有的极端情况：同样中性。
+        { at: '2026-11-05T01:01:00.000Z', project: 'e:/work/alpha', sessionId: 's1' },
+    ]);
+    const labels = recentLabels(tree);
+    assert.ok(labels.length >= 2);
+    assert.equal(labels[0], '活动记录', '无工具 evidence 应显示"活动记录"');
+    assert.equal(labels[1], '活动记录', '完全没有 kind/tool 时同样中性');
+    // 绝不能出现伪造工具名。
+    for (const label of labels) {
+        assert.notEqual(label, 'activity', '不得显示裸英文 activity 作为工具名');
+        assert.doesNotMatch(label, /未知/, '不得显示"未知工具"');
+    }
+});
+
+/* -------------------------------------------------------------------------- *
+ * 文件时长环形图（WakaTime 式占比）：服务端给什么就画什么，缺字段绝不造假
+ * -------------------------------------------------------------------------- */
+
+test('环形图：服务端返回 files[] 时按真实时长渲染占比与总时长', async () => {
+    const files = [
+        { path: 'E:/work/alpha/src/a.js', label: 'a.js', totalSeconds: 3600, touches: 3, attribution: 'apportioned' },
+        { path: 'E:/work/alpha/src/b.ts', label: 'b.ts', totalSeconds: 1800, touches: 1, attribution: 'apportioned' },
+        { path: '__other__', label: null, totalSeconds: 1800, touches: 1, attribution: 'apportioned' },
+    ];
+    hostState.fetch = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody({ files }));
+        return jsonResponse(configBody());
+    });
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    const panel = findOne(tree, node => node.props?.['data-role'] === 'heatmap');
+    assert.ok(panel !== null, '环形图区域必须挂载');
+    const text = textOf(panel).join(' ');
+    assert.match(text, /文件时长占比/);
+    assert.match(text, /a\.js/);
+    assert.match(text, /b\.ts/);
+    assert.match(text, /其他（无文件证据）/, '无文件证据的桶本地化为「其他」');
+    assert.match(text, /2h 00m/, '中心用紧凑格式显示真实总时长：3600+1800+1800 = 2h 00m');
+    assert.match(text, /50%/, '最大段占比可见');
+    assert.match(text, /25%/, '其余段占比可见');
+    // 数据诚实：不出现 undefined/null/NaN，也不凭空造文件名。
+    assert.doesNotMatch(text, /undefined|\bnull\b|NaN/);
+    assert.doesNotMatch(text, /fake\.js|example\.js/);
+});
+
+test('环形图：旧后端不返回 files 字段 → 明确显示「尚未提供」，不画空环、不造占比', async () => {
+    const body = summaryBody();
+    delete body.files;
+    hostState.fetch = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(body);
+        return jsonResponse(configBody());
+    });
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    const panel = findOne(tree, node => node.props?.['data-role'] === 'heatmap');
+    assert.ok(panel !== null);
+    const text = textOf(panel).join(' ');
+    assert.match(text, /尚未提供文件级时长数据/);
+    assert.doesNotMatch(text, /\d+%/, '缺字段时绝不能凭空出现占比数字');
+    assert.equal(findOne(panel, node => node.props?.style?.background?.includes?.('conic-gradient')), null, '不应画出环形');
+});
+
+test('环形图：files 为空数组 → 显示空态，不画环、不出现占比', async () => {
+    hostState.fetch = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody({ files: [] }));
+        return jsonResponse(configBody());
+    });
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    const panel = findOne(tree, node => node.props?.['data-role'] === 'heatmap');
+    assert.ok(panel !== null);
+    const text = textOf(panel).join(' ');
+    assert.match(text, /该范围还没有文件级活跃时长数据/);
+    assert.doesNotMatch(text, /\d+%/);
+});
+
+test('环形图：files 里时长为 0 / 非数字 / 负数一律被归一丢弃，不污染占比', async () => {
+    const files = [
+        { path: 'a.js', label: 'a.js', totalSeconds: 3600, touches: 1, attribution: 'apportioned' },
+        { path: 'zero.js', label: null, totalSeconds: 0, touches: 1, attribution: 'apportioned' },
+        { path: 'neg.js', label: null, totalSeconds: -50, touches: 1, attribution: 'apportioned' },
+        { path: 'str.js', label: null, totalSeconds: '3600', touches: 1, attribution: 'apportioned' },
+    ];
+    hostState.fetch = makeFetch((url) => {
+        if (url.includes('/summary')) return jsonResponse(summaryBody({ files }));
+        return jsonResponse(configBody());
+    });
+    hostState.document = makeDocument();
+    const plugin = mountPlugin();
+    const Section = plugin.seats.find(seat => seat.name === 'settings.section').component;
+    const tree = await settle(plugin.runtime, Section, {});
+    const panel = findOne(tree, node => node.props?.['data-role'] === 'heatmap');
+    const text = textOf(tree).join(' ');
+    assert.match(text, /a\.js/);
+    assert.doesNotMatch(text, /zero\.js|neg\.js|str\.js/, '无效时长项不得进入占比图');
+    assert.doesNotMatch(text, /undefined|\bnull\b|NaN/);
 });

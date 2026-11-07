@@ -45,6 +45,8 @@
             /** 座位 id：设置页与会话头按钮共用前缀。 */
             const SEAT_ID = 'dsh-coding-time';
             const SLOT_SETTINGS = 'settings.section';
+            /** 宿主支持的导航图标座位：id 必须与 settings.section 的 id 相同才渲染。 */
+            const SLOT_SETTINGS_ICON = 'settings.section.icon';
             const SLOT_BUNDLE_CONFIG = 'plugins.bundle.config';
             const SLOT_HEADER_ACTIONS = 'conversation.session.header.actions';
             /** 包名，也是 `plugins.bundle.config` 的分发 key。 */
@@ -64,8 +66,15 @@
                 { key: 'flushIntervalSeconds', min: 1, max: 600 },
             ];
 
-            /** DSH 设计 token；全部带浅色兜底，不引外部字体、图片或 CDN。 */
+            /**
+             * 设计令牌层：宿主 DSH token 全部带浅色兜底，零外链资源。
+             *
+             * - `C` 只放**原始颜色/底纹**（不参与布局），改主题时只需动这一层。
+             * - `V` 放**视觉尺度**（字号 / 间距 / 圆角），消除散落各处的魔法数字。
+             * - `cx()` 是唯一允许组合样式的地方：组件里用它代替满屏 `{...S.x, ...}`。
+             */
             const C = {
+                // 文本 / 边框 / 底纹：走宿主主题 token，深浅主题自适应。
                 text: 'var(--dsw-alias-label-primary, #17171a)',
                 secondary: 'var(--dsw-alias-label-secondary, #5c5c66)',
                 tertiary: 'var(--dsw-alias-label-tertiary, #8b8b96)',
@@ -73,120 +82,241 @@
                 border: 'var(--dsw-alias-border-l2, rgba(120,120,130,0.22))',
                 borderSoft: 'var(--dsw-alias-border-l1, rgba(120,120,130,0.14))',
                 borderStrong: 'var(--dsw-alias-border-l3, rgba(120,120,130,0.34))',
-                accent: 'var(--dsw-alias-brand-primary, #4d6bfe)',
-                danger: 'var(--dsw-alias-state-error-primary, #d92d20)',
-                success: 'var(--dsw-alias-state-success-primary, #12805c)',
-                warn: 'var(--dsw-alias-state-warn-primary, #b25f00)',
-                hover: 'var(--dsw-alias-interactive-bg-hover, rgba(120,120,130,0.08))',
+                layer1: 'var(--dsw-alias-bg-layer-1, transparent)',
                 surface: 'var(--dsw-alias-bg-layer-2, #ffffff)',
                 skeleton: 'var(--dsw-alias-bg-skeleton, rgba(120,120,130,0.14))',
                 shadow: 'var(--dsw-alias-shadow-popover, 0 10px 30px rgba(0,0,0,0.18))',
+                // 语义状态色保留宿主原色（错误/警告/成功），与品牌色解耦。
+                danger: 'var(--dsw-alias-state-error-primary, #d92d20)',
+                warn: 'var(--dsw-alias-state-warn-primary, #b25f00)',
+                success: 'var(--dsw-alias-state-success-primary, #12805c)',
+                hover: 'var(--dsw-alias-interactive-bg-hover, rgba(120,120,130,0.08))',
+                activeBg: 'var(--dsw-alias-interactive-bg-active, rgba(120,120,130,0.10))',
+
+                // 品牌色：蓝色系。刻意**不复用宿主 success token**——
+                // 那个 token 是绿色的，var() 的兜底值只在变量未定义时才生效，
+                // 用它做品牌色会让界面永远绿。这里用自定义属性 + 蓝色兜底，宿主不定义即恒为蓝。
+                accent: 'var(--dsh-ct-accent, #3b6ef6)',
+                accentDeep: 'var(--dsh-ct-accent-deep, #2451d6)',
+                accentLight: 'var(--dsh-ct-accent-light, #7aa8ff)',
+                // 半透明叠色与渐变：纯 CSS，不外链任何资源，深浅主题都能融合。
+                accentWash: 'rgba(59,110,246,0.10)',
+                accentGlow: 'rgba(59,110,246,0.20)',
+                accentGradV: 'linear-gradient(180deg, #7aa8ff, #3b6ef6)',
+                accentGradH: 'linear-gradient(90deg, #3b6ef6, #7aa8ff)',
+                card: 'var(--dsw-alias-bg-layer-1, rgba(127,127,140,0.035))',
+                cardSoft: 'var(--dsw-alias-bg-layer-2, rgba(127,127,140,0.055))',
+                softShadow: '0 1px 2px rgba(16,20,28,0.04), 0 6px 18px rgba(16,20,28,0.05)',
+            };
+
+            /** 环形图的分段蓝色调色板（深→浅循环，最多 12 段）。 */
+            const DONUT_COLORS = ['#2451d6', '#3b6ef6', '#5b86f9', '#7aa8ff', '#9abdff', '#bcd0ff',
+                '#1d47b8', '#3263e8', '#4d7af5', '#6f9dfb', '#93b6fd', '#b9d0ff'];
+
+            /** 视觉尺度：字号、间距、圆角。样式表里只引用这里的键。 */
+            const V = {
+                font: { xs: '10.5px', sm: '11px', md: '11.5px', base: '12.5px', lg: '13px', xl: '14px', hero: '34px', title: '22px', micro: '9.5px' },
+                gap: { xs: '2px', sm: '4px', md: '6px', lg: '8px', xl: '10px', xxl: '14px', section: '18px', page: '24px' },
+                radius: { sm: '4px', md: '6px', lg: '8px', pill: '999px' },
+                line: { tight: 1.12, body: 1.55, input: 1.3, hint: 1.45 },
             };
 
             const MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace';
+            const TABULAR = { fontVariantNumeric: 'tabular-nums' };
+            const ELLIPSIS = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 
+            /** 样式组合：从左到右浅合并，忽略空值，避免组件里手写 spread。 */
+            function cx() {
+                const out = {};
+                for (const layer of arguments) {
+                    if (layer === null || layer === undefined || layer === false) continue;
+                    if (typeof layer !== 'object') continue;
+                    Object.assign(out, layer);
+                }
+                return out;
+            }
+
+            /** 布局原语：flex column / row / grid，语义化命名。 */
+            const col = (gap, extra) => cx({ display: 'flex', flexDirection: 'column', gap }, extra);
+            const row = (gap, extra) => cx({ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap }, extra);
+            const stack = (gap, extra) => cx({ display: 'flex', flexDirection: 'column', gap }, extra);
+
+            /** 1px 分隔线（表格行 / 区块边）。 */
+            const hr = (color) => '1px solid ' + (color ?? C.borderSoft);
+            const pill = (extra) => cx({ borderRadius: V.radius.pill }, extra);
+
+            /**
+             * 语义样式表：键名描述「它是什么」，不描述「它长什么样」的硬编码。
+             * 分组顺序 = 页面从上到下：容器 → 头部 → 指标 → 通用区块 → 表格 →
+             * 图表 → 状态 → 最近活动 → 设置表单 → 会话头浮层。
+             */
             const S = {
-                root: { display: 'flex', flexDirection: 'column', gap: '18px', color: C.text, fontSize: '13px', lineHeight: 1.55, padding: '2px 0 12px' },
-                headerBlock: { display: 'flex', flexDirection: 'column', gap: '10px' },
-                titleRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px 18px' },
-                title: { margin: 0, fontSize: '16px', fontWeight: 600, letterSpacing: '-0.01em', color: C.text },
-                subtitle: { margin: '3px 0 0', fontSize: '11.5px', color: C.tertiary, fontVariantNumeric: 'tabular-nums' },
-                toolbar: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' },
-                button: {
+                /* 容器与页面骨架 */
+                root: col(V.gap.page, { color: C.text, fontSize: V.font.lg, lineHeight: V.line.body, padding: '18px 4px 24px' }),
+                headerBlock: col(V.gap.xl),
+                titleRow: cx({ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px 18px' }),
+                title: { margin: 0, fontSize: V.font.title, fontWeight: 650, letterSpacing: '-0.01em', color: C.text },
+                subtitle: { margin: '3px 0 0', fontSize: V.font.md, color: C.tertiary, ...TABULAR },
+                toolbar: row(V.gap.md),
+                meta: row('4px 14px', { fontSize: V.font.sm, color: C.caption, ...TABULAR }),
+
+                /* 按钮：统一圆角/过渡，主按钮与激活态用强调色区分 */
+                button: cx({
                     display: 'inline-flex', alignItems: 'center', gap: '5px', minHeight: '28px', padding: '3px 10px',
-                    border: '1px solid ' + C.border, borderRadius: '6px', background: 'transparent',
-                    color: C.secondary, cursor: 'pointer', fontSize: '12px', font: 'inherit', lineHeight: 1.3,
-                },
-                buttonPrimary: { borderColor: C.accent, background: C.accent, color: 'var(--dsw-alias-label-primary-foreground, #ffffff)' },
-                meta: { display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontSize: '11px', color: C.caption, fontVariantNumeric: 'tabular-nums' },
-                metrics: { display: 'flex', flexWrap: 'wrap', borderTop: '1px solid ' + C.border, borderBottom: '1px solid ' + C.border },
-                metric: { flex: '1 1 150px', minWidth: '132px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '1px' },
-                metricLabel: { fontSize: '11px', color: C.secondary, letterSpacing: '0.02em' },
-                metricValue: { fontSize: '25px', fontWeight: 500, letterSpacing: '-0.02em', lineHeight: 1.18, fontVariantNumeric: 'tabular-nums' },
-                metricValueMuted: { fontSize: '15px', fontWeight: 500, lineHeight: 1.7 },
-                metricHint: { fontSize: '11px', color: C.tertiary },
-                section: { display: 'flex', flexDirection: 'column', gap: '8px' },
-                sectionHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px' },
-                sectionTitle: { margin: 0, fontSize: '12px', fontWeight: 600, letterSpacing: '0.02em', color: C.secondary },
-                sectionHint: { margin: '2px 0 0', fontSize: '11px', color: C.tertiary },
-                tableWrap: { overflowX: 'auto' },
-                table: { width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' },
-                th: { padding: '6px 10px', textAlign: 'right', fontSize: '10.5px', fontWeight: 500, letterSpacing: '0.03em', color: C.tertiary, borderBottom: '1px solid ' + C.border, whiteSpace: 'nowrap' },
-                thFirst: { padding: '6px 10px', textAlign: 'left', fontSize: '10.5px', fontWeight: 500, letterSpacing: '0.03em', color: C.tertiary, borderBottom: '1px solid ' + C.border },
-                td: { padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid ' + C.borderSoft, fontVariantNumeric: 'tabular-nums', verticalAlign: 'top', whiteSpace: 'nowrap' },
-                tdFirst: { padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid ' + C.borderSoft, verticalAlign: 'top', minWidth: '200px' },
-                tdMuted: { padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid ' + C.borderSoft, color: C.tertiary, verticalAlign: 'top', whiteSpace: 'nowrap' },
-                projectLine: { display: 'flex', alignItems: 'center', gap: '6px', color: C.text },
-                projectName: { fontSize: '12.5px', fontWeight: 500 },
-                projectPath: { fontSize: '10.5px', color: C.caption, fontFamily: MONO, marginTop: '2px', maxWidth: '340px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                activeDot: { width: '6px', height: '6px', borderRadius: '999px', background: C.accent, flex: '0 0 auto' },
-                barTrack: { height: '3px', background: C.skeleton, borderRadius: '999px', marginTop: '5px', maxWidth: '240px', overflow: 'hidden' },
-                barFill: { height: '3px', background: C.accent, borderRadius: '999px' },
-                dayWrap: { display: 'flex', alignItems: 'flex-end', gap: '4px', minHeight: '86px', paddingTop: '4px' },
-                dayCol: { flex: '1 1 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', minWidth: 0 },
-                dayPair: { display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '2px', height: '58px', width: '100%' },
-                dayBarAi: { width: '46%', maxWidth: '18px', background: C.accent, borderRadius: '2px 2px 0 0', minHeight: '0' },
-                dayBarHuman: { width: '26%', maxWidth: '10px', background: C.borderStrong, borderRadius: '2px 2px 0 0' },
-                dayTick: { fontSize: '9.5px', color: C.caption, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-                legend: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 14px', fontSize: '10.5px', color: C.tertiary },
-                legendSwatch: { display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', marginRight: '4px', verticalAlign: 'middle' },
-                heatGrid: { display: 'grid', gridTemplateColumns: 'repeat(14, minmax(0, 1fr))', gap: '3px' },
-                heatCell: { height: '13px', borderRadius: '2px', background: C.skeleton, position: 'relative', overflow: 'hidden' },
-                heatFill: { position: 'absolute', inset: 0, background: C.accent },
-                empty: { borderTop: '1px solid ' + C.borderSoft, borderBottom: '1px solid ' + C.borderSoft, padding: '14px 2px', display: 'flex', flexDirection: 'column', gap: '2px' },
-                emptyTitle: { margin: 0, fontSize: '12.5px', color: C.secondary },
-                emptyHint: { margin: 0, fontSize: '11px', color: C.caption },
-                notice: { borderLeft: '2px solid ' + C.border, padding: '6px 0 6px 10px', fontSize: '11.5px', color: C.secondary, display: 'flex', flexDirection: 'column', gap: '2px' },
-                noticeTitle: { fontWeight: 600, fontSize: '11.5px' },
-                noticeList: { margin: 0, paddingLeft: '16px', fontSize: '11px', color: C.tertiary },
-                recent: { display: 'flex', flexDirection: 'column' },
-                recentRow: { display: 'grid', gridTemplateColumns: '86px minmax(90px, 1fr) minmax(0, 2.2fr)', gap: '10px', padding: '5px 0', borderBottom: '1px solid ' + C.borderSoft, fontSize: '11.5px', alignItems: 'baseline' },
-                recentTime: { color: C.caption, fontVariantNumeric: 'tabular-nums' },
-                recentTool: { color: C.secondary, fontFamily: MONO, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                recentPath: { color: C.tertiary, fontFamily: MONO, fontSize: '10.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                block: { display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid ' + C.border, paddingTop: '14px' },
-                blockHead: { display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 14px' },
-                blockTitle: { margin: 0, fontSize: '14px', fontWeight: 600, color: C.text },
-                badge: { display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '1px 6px', borderRadius: '999px', border: '1px solid ' + C.border, fontSize: '10px', color: C.tertiary, fontVariantNumeric: 'tabular-nums' },
-                formRow: { display: 'grid', gridTemplateColumns: 'minmax(170px, 250px) minmax(0, 1fr)', gap: '4px 18px', padding: '9px 0', borderBottom: '1px solid ' + C.borderSoft, alignItems: 'start' },
-                formLabel: { display: 'flex', flexDirection: 'column', gap: '1px' },
-                formLabelText: { fontSize: '12.5px', color: C.text },
-                formHint: { fontSize: '10.5px', color: C.caption, lineHeight: 1.45 },
-                control: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' },
-                input: {
-                    width: '104px', padding: '4px 8px', borderRadius: '6px', border: '1px solid ' + C.border,
-                    background: 'var(--dsw-alias-bg-layer-1, transparent)', color: C.text,
-                    fontVariantNumeric: 'tabular-nums', fontSize: '12.5px', font: 'inherit',
-                },
-                inputDisabled: { opacity: '0.6', cursor: 'not-allowed' },
-                unit: { fontSize: '11px', color: C.caption },
-                fieldError: { color: C.danger, fontSize: '10.5px' },
-                checkRow: { display: 'inline-flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12.5px', color: C.text },
-                pathValue: { fontFamily: MONO, fontSize: '11px', color: C.secondary, wordBreak: 'break-all', background: 'var(--dsw-alias-bg-layer-1, transparent)', border: '1px solid ' + C.borderSoft, borderRadius: '4px', padding: '3px 6px' },
-                footer: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', paddingTop: '10px' },
-                footerText: { fontSize: '11px', color: C.tertiary, fontVariantNumeric: 'tabular-nums' },
-                footerTextError: { fontSize: '11.5px', color: C.danger },
-                footerTextOk: { fontSize: '11.5px', color: C.success },
-                statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '4px 18px', fontSize: '11.5px' },
-                statItem: { display: 'flex', justifyContent: 'space-between', gap: '8px', borderBottom: '1px solid ' + C.borderSoft, padding: '3px 0' },
-                statKey: { color: C.tertiary },
-                statValue: { color: C.text, fontVariantNumeric: 'tabular-nums' },
-                headerButton: {
+                    border: hr(C.border), borderRadius: V.radius.md, background: C.card,
+                    color: C.secondary, cursor: 'pointer', fontSize: V.font.base, font: 'inherit', lineHeight: V.line.input,
+                    transition: 'background-color .16s ease, border-color .16s ease, color .16s ease',
+                }),
+                buttonPrimary: { borderColor: C.accent, background: C.accentWash, color: C.accent, fontWeight: 600 },
+                buttonActive: { color: C.accent, borderColor: C.borderStrong, background: C.accentWash },
+                buttonDisabled: { opacity: '0.55', cursor: 'not-allowed' },
+                headerButton: cx({
                     display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 8px', minHeight: '28px',
-                    border: '1px solid ' + C.border, borderRadius: '6px', background: 'transparent',
-                    color: C.secondary, cursor: 'pointer', fontSize: '12px', font: 'inherit', lineHeight: 1.3,
-                },
-                popover: {
+                    border: hr(C.border), borderRadius: V.radius.md, background: C.card,
+                    color: C.secondary, cursor: 'pointer', fontSize: V.font.base, font: 'inherit', lineHeight: V.line.input,
+                    transition: 'background-color .16s ease, border-color .16s ease, color .16s ease',
+                }),
+                headerButtonOpen: { color: C.accent, borderColor: C.borderStrong, background: C.accentWash },
+
+                /* KPI 指标带：卡片式分区 + 首格强调色引导线 */
+                metrics: cx({
+                    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: V.gap.md,
+                }),
+                metric: cx({
+                    padding: '16px 18px', border: hr(C.borderSoft), borderRadius: V.radius.lg,
+                    background: C.cardSoft, boxShadow: C.softShadow,
+                }, col(V.gap.xs)),
+                metricLabel: { fontSize: V.font.sm, color: C.secondary, letterSpacing: '0.06em', textTransform: 'uppercase' },
+                metricValue: { fontSize: V.font.hero, fontWeight: 650, letterSpacing: '-0.03em', lineHeight: V.line.tight, color: C.text, ...TABULAR },
+                metricValueMuted: { fontSize: '15px', fontWeight: 500, lineHeight: 1.7, color: C.tertiary },
+                metricHint: { fontSize: V.font.sm, color: C.tertiary, lineHeight: V.line.hint },
+
+                /* 通用区块 / 标题 */
+                section: col(V.gap.lg),
+                sectionTight: col(V.gap.md),
+                sectionHead: cx({ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: V.gap.xxl }),
+                sectionTitle: { margin: 0, fontSize: V.font.lg, fontWeight: 600, letterSpacing: '0.02em', color: C.text },
+                sectionHint: { margin: '2px 0 0', fontSize: V.font.sm, color: C.tertiary },
+
+                /* 表格：包一层柔和卡片，表头用小写字母间距做数据台质感 */
+                tableWrap: cx({ overflowX: 'auto', border: hr(C.borderSoft), borderRadius: V.radius.lg, background: C.card, boxShadow: C.softShadow }),
+                table: { width: '100%', borderCollapse: 'collapse', fontSize: V.font.base },
+                th: cx({ padding: '10px 12px', textAlign: 'right', fontSize: V.font.xs, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: C.tertiary, borderBottom: hr(C.border), whiteSpace: 'nowrap' }),
+                thFirst: cx({ padding: '10px 12px', textAlign: 'left', fontSize: V.font.xs, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: C.tertiary, borderBottom: hr(C.border) }),
+                td: cx({ padding: '10px 12px', textAlign: 'right', borderBottom: hr(C.borderSoft), verticalAlign: 'top', whiteSpace: 'nowrap' }, TABULAR),
+                tdFirst: cx({ padding: '10px 12px', textAlign: 'left', borderBottom: hr(C.borderSoft), verticalAlign: 'top', minWidth: '200px' }),
+                tdMuted: cx({ padding: '10px 12px', textAlign: 'right', borderBottom: hr(C.borderSoft), color: C.tertiary, verticalAlign: 'top', whiteSpace: 'nowrap' }),
+
+                /* 项目行 */
+                projectLine: cx({ display: 'flex', alignItems: 'center', gap: V.gap.md, justifyContent: 'space-between' }, { color: C.text }),
+                projectName: { fontSize: V.font.base, fontWeight: 500 },
+                rankPct: cx({ marginLeft: 'auto', fontSize: V.font.sm, color: C.accent, fontWeight: 600 }, TABULAR),
+                projectPath: cx({ fontSize: V.font.xs, color: C.caption, fontFamily: MONO, marginTop: V.gap.xs, maxWidth: '340px' }, ELLIPSIS),
+                activeDot: pill({ width: '6px', height: '6px', background: C.accent, flex: '0 0 auto' }),
+                barTrack: pill({ height: '7px', background: C.skeleton, marginTop: '7px', maxWidth: '240px', overflow: 'hidden' }),
+                barFill: pill({ height: '7px', background: C.accentGradH, boxShadow: '0 0 8px ' + C.accentGlow }),
+
+                /* 按日柱状图 + 强度热力图 */
+                dayWrap: cx({ display: 'flex', alignItems: 'flex-end', gap: V.gap.md, minHeight: '158px', paddingTop: V.gap.lg, borderBottom: hr(C.borderSoft) }),
+                dayCol: col(V.gap.sm, { flex: '1 1 0', alignItems: 'center', minWidth: 0 }),
+                dayPair: cx({ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '3px', height: '132px', width: '100%' }),
+                dayBarAi: { width: '46%', maxWidth: '18px', background: C.accentGradV, borderRadius: '3px 3px 0 0', minHeight: '0' },
+                dayBarHuman: { width: '26%', maxWidth: '10px', background: C.borderStrong, borderRadius: '3px 3px 0 0' },
+                dayTick: cx({ fontSize: V.font.micro, color: C.caption }, TABULAR, ELLIPSIS),
+                legend: row('4px 14px', { fontSize: V.font.xs, color: C.tertiary }),
+                legendSwatch: { display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', marginRight: V.gap.sm, verticalAlign: 'middle' },
+                heatGrid: { display: 'grid', gridTemplateColumns: 'repeat(14, minmax(0, 1fr))', gap: '3px' },
+                heatCell: cx({ height: '13px', borderRadius: '3px', background: C.skeleton, position: 'relative' }, { overflow: 'hidden' }),
+                heatFill: { position: 'absolute', inset: 0, background: C.accent },
+                // 环形（甜甜圈）占比图：conic-gradient 分段 + 中心镂空显示总时长。
+                donutWrap: cx({ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: V.gap.xxl }, { padding: '6px 0', justifyContent: 'flex-start' }),
+                donut: { width: '152px', height: '152px', borderRadius: '50%', flex: '0 0 auto', position: 'relative' },
+                donutHole: cx({ position: 'absolute', inset: '22px', borderRadius: '50%', background: C.surface, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }, { textAlign: 'center' }),
+                donutTotalLabel: { fontSize: V.font.xs, color: C.caption, letterSpacing: '0.04em', textTransform: 'uppercase', whiteSpace: 'nowrap' },
+                donutTotalValue: cx({ fontSize: '14px', fontWeight: 650, color: C.text, lineHeight: V.line.tight, whiteSpace: 'nowrap' }, TABULAR),
+                donutLegend: col('5px', { flex: '0 1 440px', minWidth: '260px', maxWidth: '480px' }),
+                donutRow: { display: 'grid', gridTemplateColumns: '10px minmax(0,1fr) auto auto', gap: V.gap.lg, alignItems: 'center', fontSize: V.font.md, padding: '2px 0' },
+                donutSwatch: { width: '10px', height: '10px', borderRadius: '2px', flex: '0 0 auto' },
+                donutName: cx({ color: C.secondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+                donutValue: cx({ color: C.text, fontWeight: 600 }, TABULAR),
+                donutShare: cx({ color: C.tertiary, minWidth: '38px', textAlign: 'right' }, TABULAR),
+                dotMissing: { fontSize: '10px', color: C.caption },
+                warnText: { color: C.warn },
+
+                /* 空态 / 提示 / 状态徽标 */
+                empty: col(V.gap.xs, { border: hr(C.borderSoft), borderRadius: V.radius.md, background: C.card, padding: '16px 14px' }),
+                emptyTitle: { margin: 0, fontSize: V.font.base, color: C.secondary, fontWeight: 500 },
+                emptyHint: { margin: 0, fontSize: V.font.sm, color: C.caption },
+                notice: col(V.gap.xs, { borderLeft: '3px solid ' + C.border, borderRadius: V.radius.sm, background: C.card, padding: '8px 12px', fontSize: V.font.md, color: C.secondary }),
+                noticeTitle: { fontWeight: 600, fontSize: V.font.md },
+                noticeBody: { fontSize: V.font.xs, color: C.tertiary },
+                noticeList: { margin: 0, paddingLeft: '16px', fontSize: V.font.xs, color: C.tertiary },
+                badge: cx({ display: 'inline-flex', alignItems: 'center', gap: V.gap.sm, padding: '1px 6px' }, pill(), { border: hr(C.border), fontSize: V.font.xl, color: C.tertiary, ...TABULAR }),
+                badgeWarn: { color: C.warn },
+
+                /* 最近活动 */
+                recent: col(0),
+                recentRow: { display: 'grid', gridTemplateColumns: '86px minmax(90px, 1fr) minmax(0, 2.2fr)', gap: V.gap.xl, padding: '8px 2px', borderBottom: hr(C.borderSoft), fontSize: V.font.md, alignItems: 'baseline' },
+                recentTime: cx({ color: C.caption }, TABULAR),
+                recentTool: cx({ color: C.secondary, fontFamily: MONO, fontSize: V.font.sm }, ELLIPSIS),
+                recentPath: cx({ color: C.tertiary, fontFamily: MONO, fontSize: V.font.xs }, ELLIPSIS),
+
+                /* 设置表单：整块作为一个分区卡片 */
+                block: col(V.gap.xl, { border: hr(C.borderSoft), borderRadius: V.radius.lg, background: C.card, padding: V.gap.xxl, boxShadow: C.softShadow }),
+                blockHead: cx({ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 14px' }),
+                blockTitle: { margin: 0, fontSize: V.font.xl, fontWeight: 600, color: C.text },
+                formRow: { display: 'grid', gridTemplateColumns: 'minmax(170px, 250px) minmax(0, 1fr)', gap: '4px 18px', padding: '9px 0', borderBottom: hr(C.borderSoft), alignItems: 'start' },
+                formLabel: col('1px'),
+                formLabelText: { fontSize: V.font.base, color: C.text },
+                formHint: { fontSize: V.font.xs, color: C.caption, lineHeight: V.line.hint },
+                control: row(V.gap.lg),
+                input: cx({
+                    width: '104px', padding: '4px 8px', borderRadius: V.radius.md, border: hr(C.border),
+                    background: C.layer1, color: C.text, fontSize: V.font.base, font: 'inherit',
+                }, TABULAR),
+                inputDisabled: { opacity: '0.6', cursor: 'not-allowed' },
+                unit: { fontSize: V.font.sm, color: C.caption },
+                fieldError: { color: C.danger, fontSize: V.font.xs },
+                checkRow: cx({ display: 'inline-flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: V.font.base, color: C.text }),
+                checkRowDisabled: { opacity: '0.6' },
+                pathValue: cx({ fontFamily: MONO, fontSize: V.font.sm, color: C.secondary, wordBreak: 'break-all', background: C.layer1, border: hr(C.borderSoft), borderRadius: V.radius.sm, padding: '3px 6px' }),
+                footer: row(V.gap.lg, { paddingTop: V.gap.xl }),
+                footerText: cx({ fontSize: V.font.sm, color: C.tertiary }, TABULAR),
+                footerTextError: { fontSize: V.font.md, color: C.danger },
+                footerTextOk: { fontSize: V.font.md, color: C.success, fontWeight: 600 },
+                statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '4px 18px', fontSize: V.font.md },
+                statItem: cx({ display: 'flex', justifyContent: 'space-between', gap: V.gap.lg, borderBottom: hr(C.borderSoft), padding: '3px 0' }),
+                statKey: { color: C.tertiary },
+                statValue: cx({ color: C.text }, TABULAR),
+                strongNumber: cx({ color: C.text, fontWeight: 600 }, TABULAR),
+
+                /* 会话头浮层 */
+                popover: col(V.gap.md, {
                     position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 40, width: '316px',
-                    border: '1px solid ' + C.border, borderRadius: '8px', background: C.surface,
-                    boxShadow: C.shadow, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '9px',
-                },
-                popoverHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
-                popoverTitle: { margin: 0, fontSize: '12px', fontWeight: 600, color: C.text },
-                popoverRow: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px', fontSize: '11.5px' },
+                    border: hr(C.border), borderRadius: V.radius.lg, background: C.surface,
+                    boxShadow: C.shadow, padding: '10px 12px',
+                }),
+                popoverHead: cx({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: V.gap.lg }),
+                popoverTitle: { margin: 0, fontSize: V.font.base, fontWeight: 600, color: C.text },
+                popoverRow: cx({ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: V.gap.xl, fontSize: V.font.md }),
                 popoverKey: { color: C.tertiary },
-                popoverValue: { color: C.text, fontVariantNumeric: 'tabular-nums' },
-                popoverHint: { margin: 0, fontSize: '10.5px', color: C.caption },
+                popoverValue: cx({ color: C.text }, TABULAR),
+                popoverKeyEllipsis: cx({ color: C.tertiary }, ELLIPSIS),
+                popoverHint: { margin: 0, fontSize: V.font.xs, color: C.caption },
+                headerAnchor: { position: 'relative', display: 'inline-block' },
+                // 品牌方块图标：设置侧边栏（settings.section.icon，size 由宿主给）与会话头共用。
+                brandIcon: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: V.radius.sm, background: C.accentGradH, color: '#fff', lineHeight: 1, flex: '0 0 auto', boxSizing: 'border-box' },
+                // 会话头：蓝色胶囊图标 + 浮层顶部渐变条 + KPI 大数字 + 项目横条。
+                headerIcon: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '16px', height: '16px', borderRadius: V.radius.sm, background: C.accentGradH, color: '#fff', fontSize: '10px', lineHeight: 1, flex: '0 0 auto' },
+                headerLabel: { color: C.text, fontWeight: 600, ...TABULAR },
+                popoverAccentBar: { height: '3px', borderRadius: '8px 8px 0 0', background: C.accentGradH, margin: '-10px -12px 4px' },
+                popoverHero: cx({ fontSize: '26px', fontWeight: 650, letterSpacing: '-0.02em', color: C.accent, lineHeight: 1.15 }, TABULAR),
+                popoverHeroLabel: { fontSize: V.font.xs, color: C.caption, letterSpacing: '0.04em', textTransform: 'uppercase' },
+                popoverProjectRow: { display: 'flex', alignItems: 'center', gap: V.gap.lg, fontSize: V.font.md },
+                popoverProjectName: cx({ flex: '1 1 auto', minWidth: 0, color: C.secondary }, ELLIPSIS),
+                popoverProjectBar: pill({ width: '54px', height: '5px', background: C.skeleton, overflow: 'hidden', flex: '0 0 auto' }),
+                popoverProjectFill: pill({ height: '5px', background: C.accentGradH }),
+                popoverProjectValue: cx({ minWidth: '46px', textAlign: 'right', color: C.text, fontWeight: 600 }, TABULAR),
             };
 
             /* ------------------------------------------------------------------ *
@@ -245,19 +375,48 @@
                     'days.missing': '未采集',
                     'days.aiLegend': 'AI 时长',
                     'days.humanLegend': '人类时长',
-                    'heatmap.title': '按日强度',
-                    'heatmap.hint': '每格一天，深浅只表示 AI 时长的相对高低；空格表示未采集。',
+                    'heatmap.title': '文件时长占比',
+                    'heatmap.hint': '按文件分摊的活跃时长占比（同一区间内多文件按时长切分，不相加）。无文件证据的区间归入「其他」。',
                     'heatmap.low': '少',
                     'heatmap.high': '多',
-                    'section.recent': '最近事件',
+                    'heatmap.empty': '该范围还没有文件级活跃时长数据。',
+                    'heatmap.notProvided': '后端尚未提供文件级时长数据。',
+                    'heatmap.other': '其他（无文件证据）',
+                    'heatmap.total': '合计',
+                    'heatmap.share': '占比',
+                    'section.recent': '最近活动',
                     'recent.empty': '暂无记录。',
                     'recent.unknownTool': '未知工具',
+                    'recent.interval': '活动区间',
+                    'recent.activity': '活动记录',
+                    'git.title': '文件变更',
+                    'git.hint': '当前 Git 工作区差异，不受工时日期范围影响；不代表 AI/人工归因，也不是 Git 提交历史。',
+                    'git.notProvided': '尚未提供文件状态（后端未返回工作区数据）。',
+                    'git.observedAt': '检测时间',
+                    'git.truncated': '结果已截断，仅显示部分文件。',
+                    'git.clean': '工作区干净，没有检测到的文件变更。',
+                    'git.notGit': '该目录不是 Git 仓库。',
+                    'git.unavailable': 'Git 状态不可用。',
+                    'git.reason': '原因',
+                    'git.colPath': '路径',
+                    'git.colStatus': '状态',
+                    'git.colLines': '+/− 行数',
+                    'git.binary': '二进制文件',
+                    'git.status.added': '新增',
+                    'git.status.modified': '修改',
+                    'git.status.deleted': '删除',
+                    'git.status.renamed': '重命名',
+                    'git.status.copied': '复制',
+                    'git.status.untracked': '未跟踪',
+                    'git.status.conflicted': '冲突',
                     settings: '设置',
                     'settings.loading': '正在读取配置…',
                     'settings.loadError': '读取配置失败',
                     'settings.retry': '重试',
                     'settings.readonly': '暂不可编辑：当前未找到本插件的可写配置入口。为避免保存到错误位置，控件已禁用，也不会发送保存请求。',
                     'settings.readonlyReason': '只读原因',
+                    'settings.coldFields': '部分字段需重载后生效',
+                    'settings.coldFieldsHint': '存储目录是启动参数，本页只做展示；如需修改请到宿主配置中调整后重载插件。本次保存不会搬移已有数据，也不会切换目录；其余字段保存后立即生效。',
                     'settings.enabled': '启用采集',
                     'settings.enabledHint': '关闭后不再记录任何时长与行数；已落盘的数据保留。',
                     'settings.heartbeat': '心跳间隔（秒）',
@@ -385,19 +544,48 @@
                     'days.missing': 'Not collected',
                     'days.aiLegend': 'AI time',
                     'days.humanLegend': 'Human time',
-                    'heatmap.title': 'Daily intensity',
-                    'heatmap.hint': 'One cell per day; shade only ranks AI time. An empty cell means no data.',
+                    'heatmap.title': 'Time by file',
+                    'heatmap.hint': 'Share of active time apportioned by file (an interval touching several files is split, never summed). Intervals without file evidence go to "Other".',
                     'heatmap.low': 'less',
                     'heatmap.high': 'more',
-                    'section.recent': 'Recent events',
+                    'heatmap.empty': 'No per-file active time in this range yet.',
+                    'heatmap.notProvided': 'The backend has not provided per-file time data.',
+                    'heatmap.other': 'Other (no file evidence)',
+                    'heatmap.total': 'Total',
+                    'heatmap.share': 'Share',
+                    'section.recent': 'Recent activity',
                     'recent.empty': 'Nothing recorded yet.',
                     'recent.unknownTool': 'unknown tool',
+                    'recent.interval': 'Activity interval',
+                    'recent.activity': 'Activity',
+                    'git.title': 'File changes',
+                    'git.hint': 'Current Git working-tree changes; independent of the time range, not an AI/human attribution, and not Git commit history.',
+                    'git.notProvided': 'File status not provided yet (no working-tree data from the backend).',
+                    'git.observedAt': 'Checked at',
+                    'git.truncated': 'Results truncated; only some files are shown.',
+                    'git.clean': 'Working tree is clean; no file changes detected.',
+                    'git.notGit': 'Not a Git repository.',
+                    'git.unavailable': 'Git status unavailable.',
+                    'git.reason': 'Reason',
+                    'git.colPath': 'Path',
+                    'git.colStatus': 'Status',
+                    'git.colLines': '+/- lines',
+                    'git.binary': 'binary file',
+                    'git.status.added': 'added',
+                    'git.status.modified': 'modified',
+                    'git.status.deleted': 'deleted',
+                    'git.status.renamed': 'renamed',
+                    'git.status.copied': 'copied',
+                    'git.status.untracked': 'untracked',
+                    'git.status.conflicted': 'conflicted',
                     settings: 'Settings',
                     'settings.loading': 'Reading configuration…',
                     'settings.loadError': 'Could not read configuration',
                     'settings.retry': 'Retry',
                     'settings.readonly': 'Not editable: no writable configuration entry was found for this plugin. To avoid saving to the wrong location, the controls are disabled and no save request is sent.',
                     'settings.readonlyReason': 'Reason',
+                    'settings.coldFields': 'Some fields take effect after a reload',
+                    'settings.coldFieldsHint': 'The storage directory is a startup parameter; this page only displays it. To change it, edit the Host configuration and reload the plugin. This save does not migrate existing data or switch directories; all other fields take effect immediately after saving.',
                     'settings.enabled': 'Enable collection',
                     'settings.enabledHint': 'When off, no new time or line counts are recorded. Existing data stays.',
                     'settings.heartbeat': 'Heartbeat interval (s)',
@@ -595,6 +783,23 @@
                 if (hours > 0) return hours + ' 小时 ' + minutes + ' 分';
                 if (minutes > 0) return minutes + ' 分';
                 return rest + ' 秒';
+            }
+
+            /** 环形图中心用的紧凑时长（不带「小时/分」长词，避免内圆里换行）。 */
+            function compactDuration(seconds, lang) {
+                if (!isFiniteNumber(seconds)) return null;
+                const total = Math.max(0, Math.round(seconds));
+                const hours = Math.floor(total / 3600);
+                const minutes = Math.floor((total % 3600) / 60);
+                const rest = total % 60;
+                if (lang === 'en') {
+                    if (hours > 0) return hours + 'h ' + pad2(minutes) + 'm';
+                    if (minutes > 0) return minutes + 'm';
+                    return rest + 's';
+                }
+                if (hours > 0) return hours + 'h ' + pad2(minutes) + 'm';
+                if (minutes > 0) return minutes + 'm';
+                return rest + 's';
             }
 
             function formatDateTime(iso, timezone, lang) {
@@ -845,6 +1050,60 @@
                 };
             }
 
+            /** 按文件分摊时长：只认服务端形状；缺字段→null（旧后端），绝不本地造占比。 */
+            function normalizeFiles(raw) {
+                if (!Array.isArray(raw)) return null;
+                return raw
+                    .filter(item => item !== null && typeof item === 'object')
+                    .map(item => ({
+                        path: typeof item.path === 'string' ? item.path : '',
+                        label: typeof item.label === 'string' && item.label !== '' ? item.label : null,
+                        totalSeconds: secondsOf(item.totalSeconds),
+                        touches: countOf(item.touches),
+                        attribution: item.attribution === 'apportioned' ? 'apportioned' : 'unknown',
+                    }))
+                    .filter(item => isFiniteNumber(item.totalSeconds) && item.totalSeconds > 0);
+            }
+
+
+            /** 文件状态白名单；未知状态按中性 'unknown' 处理，绝不猜。 */
+            const GIT_FILE_STATUSES = new Set(['added', 'modified', 'deleted', 'renamed', 'copied', 'untracked', 'conflicted']);
+
+            /** 把后端 workingTree 折成只读展示模型；缺字段→null（旧后端），不造假干净。 */
+            function normalizeWorkingTree(raw) {
+                if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+                const projects = Array.isArray(raw.projects)
+                    ? raw.projects.filter(item => item !== null && typeof item === 'object').map((item) => {
+                        const files = Array.isArray(item.files)
+                            ? item.files.filter(file => file !== null && typeof file === 'object').map((file) => ({
+                                path: typeof file.path === 'string' ? file.path : '',
+                                oldPath: typeof file.oldPath === 'string' ? file.oldPath : '',
+                                status: GIT_FILE_STATUSES.has(file.status) ? file.status : 'unknown',
+                                addedLines: Number.isFinite(file.addedLines) ? Math.max(0, Math.round(file.addedLines)) : null,
+                                deletedLines: Number.isFinite(file.deletedLines) ? Math.max(0, Math.round(file.deletedLines)) : null,
+                                binary: file.binary === true,
+                            }))
+                            : [];
+                        const status = item.status === 'ok' || item.status === 'not_git' || item.status === 'unavailable'
+                            ? item.status : 'unavailable';
+                        return {
+                            project: typeof item.project === 'string' ? item.project : '',
+                            repoRoot: typeof item.repoRoot === 'string' ? item.repoRoot : '',
+                            status,
+                            reason: typeof item.reason === 'string' ? item.reason : '',
+                            observedAt: typeof item.observedAt === 'string' ? item.observedAt : '',
+                            truncated: item.truncated === true,
+                            files,
+                        };
+                    })
+                    : [];
+                return {
+                    observedAt: typeof raw.observedAt === 'string' ? raw.observedAt : '',
+                    truncated: raw.truncated === true,
+                    projects,
+                };
+            }
+
             /**
              * summary 响应归一。
              *
@@ -879,11 +1138,36 @@
                     days: Array.isArray(body.days)
                         ? body.days.filter(item => item !== null && typeof item === 'object' && typeof item.date === 'string').map(normalizeDay)
                         : [],
+                    // 旧后端没有该字段 → null（显示「尚未提供」，绝不本地造占比）。
+                    files: normalizeFiles(body.files),
                     recent: Array.isArray(body.recent)
                         ? body.recent.filter(item => item !== null && typeof item === 'object').map(normalizeRecent)
                         : [],
                     stats: body.stats !== null && typeof body.stats === 'object' ? body.stats : null,
+                    // 旧后端没有该字段 → null（显示「尚未提供」，绝不假装干净）。
+                    workingTree: normalizeWorkingTree(body.workingTree ?? null),
                 };
+            }
+
+            /** Host 返回的字段元数据键。 */
+            const CONFIG_META_FIELDS = ['readonlyFields', 'restartRequiredFields', 'liveFields'];
+
+            /** 允许出现在字段元数据里的已知配置名（协议约定的字段，含表单用的复合名）。 */
+            const KNOWN_CONFIG_NAMES = new Set([
+                'enabled', 'heartbeatIntervalSeconds', 'idleThresholdSeconds',
+                'flushIntervalSeconds', 'trackAgentActivity', 'trackAiLines',
+                'humanTracking', 'humanTracking.enabled', 'timezone',
+                'weekStartsOn', 'exclude', 'storageDirectory',
+            ]);
+
+            /** 只收「已知字段名 + 字符串」；未知/缺失一律忽略，绝不把缺字段当已授权。 */
+            function fieldSetOf(raw) {
+                if (!Array.isArray(raw)) return new Set();
+                const set = new Set();
+                for (const item of raw) {
+                    if (typeof item === 'string' && KNOWN_CONFIG_NAMES.has(item)) set.add(item);
+                }
+                return set;
             }
 
             function normalizeConfigEntry(body) {
@@ -892,11 +1176,17 @@
                 const warnings = Array.isArray(body.warnings)
                     ? body.warnings.map(item => (typeof item === 'string' ? item : (typeof item?.message === 'string' ? item.message : ''))).filter(text => text !== '')
                     : [];
+                const fieldMeta = {};
+                for (const key of CONFIG_META_FIELDS) fieldMeta[key] = fieldSetOf(body[key]);
                 return {
                     config,
                     revision: Number.isInteger(body.revision) ? body.revision : null,
                     namespace: typeof body.namespace === 'string' ? body.namespace : null,
-                    editable: body.editable !== false,
+                    // 只有 Host 显式给出 editable===true 才可编辑；缺失/非布尔真值都视为未授权。
+                    editable: body.editable === true,
+                    readonlyFields: fieldMeta.readonlyFields,
+                    restartRequiredFields: fieldMeta.restartRequiredFields,
+                    liveFields: fieldMeta.liveFields,
                     warnings,
                     stats: body.stats !== null && typeof body.stats === 'object' ? body.stats : null,
                 };
@@ -980,16 +1270,13 @@
              * ------------------------------------------------------------------ */
 
             function Button(props = {}) {
-                const style = { ...S.button, ...(props.primary === true ? S.buttonPrimary : {}), ...(props.style ?? {}) };
-                if (props.active === true) {
-                    style.color = C.accent;
-                    style.borderColor = C.borderStrong;
-                    style.background = 'var(--dsw-alias-interactive-bg-active, rgba(120,120,130,0.10))';
-                }
-                if (props.disabled === true) {
-                    style.opacity = '0.55';
-                    style.cursor = 'not-allowed';
-                }
+                const style = cx(
+                    S.button,
+                    props.primary === true && S.buttonPrimary,
+                    props.active === true && S.buttonActive,
+                    props.disabled === true && S.buttonDisabled,
+                    props.style,
+                );
                 return h('button', {
                     type: 'button',
                     onClick: props.disabled === true ? undefined : props.onClick,
@@ -1017,9 +1304,9 @@
 
             function Notice(props = {}) {
                 const accent = props.tone === 'error' ? C.danger : props.tone === 'warn' ? C.warn : C.borderStrong;
-                return h('div', { style: { ...S.notice, borderLeftColor: accent }, 'data-role': props.role ?? 'notice', 'aria-live': props.tone === 'error' ? 'polite' : undefined },
-                    h('div', { style: { ...S.noticeTitle, color: props.tone === 'error' ? C.danger : C.secondary } }, props.title),
-                    props.children !== undefined ? h('div', { style: { fontSize: '11px', color: C.tertiary } }, props.children) : null,
+                return h('div', { style: cx(S.notice, { borderLeftColor: accent }), 'data-role': props.role ?? 'notice', 'aria-live': props.tone === 'error' ? 'polite' : undefined },
+                    h('div', { style: cx(S.noticeTitle, props.tone === 'error' && { color: C.danger }) }, props.title),
+                    props.children !== undefined ? h('div', { style: S.noticeBody }, props.children) : null,
                     Array.isArray(props.items) && props.items.length > 0
                         ? h('ul', { style: S.noticeList }, props.items.map((item, index) => h('li', { key: index }, item)))
                         : null);
@@ -1063,34 +1350,30 @@
 
             function Metrics(props = {}) {
                 const { totals, humanStatus, lang, tr } = props;
-                const ai = formatDuration(totals.aiSeconds, lang) ?? tr('metric.pending');
-                const human = humanTextOf(totals.humanSeconds, humanStatus, lang, tr);
-                const total = formatDuration(totals.totalSeconds, lang) ?? tr('metric.pending');
                 const linesMissing = !isFiniteNumber(totals.aiAddedLines) && !isFiniteNumber(totals.aiDeletedLines);
+                const cells = [
+                    { metric: 'ai', label: tr('metric.ai'), value: formatDuration(totals.aiSeconds, lang) ?? tr('metric.pending'), hint: tr('metric.aiHint'), muted: !isFiniteNumber(totals.aiSeconds) },
+                    { metric: 'human', label: tr('metric.human'), value: humanTextOf(totals.humanSeconds, humanStatus, lang, tr), hint: humanHintOf(humanStatus, tr), muted: !isFiniteNumber(totals.humanSeconds) },
+                    { metric: 'total', label: tr('metric.total'), value: formatDuration(totals.totalSeconds, lang) ?? tr('metric.pending'), hint: tr('metric.totalHint'), muted: !isFiniteNumber(totals.totalSeconds) },
+                    { metric: 'lines', label: tr('metric.lines'), value: linesTextOf(totals.aiAddedLines, totals.aiDeletedLines, tr), hint: tr('lineQuality.' + totals.lineDataQuality), muted: linesMissing },
+                ];
                 return h('div', { style: S.metrics, 'data-role': 'metrics' },
-                    h(MetricCell, { metric: 'ai', label: tr('metric.ai'), value: ai, hint: tr('metric.aiHint'), muted: !isFiniteNumber(totals.aiSeconds) }),
-                    h(MetricCell, { metric: 'human', label: tr('metric.human'), value: human, hint: humanHintOf(humanStatus, tr), muted: !isFiniteNumber(totals.humanSeconds) }),
-                    h(MetricCell, { metric: 'total', label: tr('metric.total'), value: total, hint: tr('metric.totalHint'), muted: !isFiniteNumber(totals.totalSeconds) }),
-                    h(MetricCell, {
-                        metric: 'lines',
-                        label: tr('metric.lines'),
-                        value: linesTextOf(totals.aiAddedLines, totals.aiDeletedLines, tr),
-                        hint: tr('lineQuality.' + totals.lineDataQuality),
-                        muted: linesMissing,
-                    }));
+                    cells.map(cell => h(MetricCell, cell)));
             }
 
             function ProjectRow(props = {}) {
                 const { project, maxSeconds, humanStatus, timezone, lang, tr } = props;
                 const total = isFiniteNumber(project.totalSeconds) ? project.totalSeconds : null;
-                const width = total === null || maxSeconds <= 0 ? '0%' : Math.max(total > 0 ? 3 : 0, Math.round((total / maxSeconds) * 100)) + '%';
+                const pct = total === null || maxSeconds <= 0 ? null : Math.round((total / maxSeconds) * 100);
+                const width = pct === null ? '0%' : Math.max(total > 0 ? 3 : 0, pct) + '%';
                 return h('tr', { 'data-role': 'project-row' },
                     h('td', { style: S.tdFirst },
                         h('div', { style: S.projectLine },
                             project.active === true ? h('span', { style: S.activeDot, title: tr('active'), 'aria-label': tr('active') }) : null,
-                            h('span', { style: S.projectName }, project.label)),
+                            h('span', { style: S.projectName }, project.label),
+                            pct === null ? null : h('span', { style: S.rankPct }, pct + '%')),
                         h('div', { style: S.projectPath, title: project.cwd }, project.cwd),
-                        h('div', { style: S.barTrack }, h('div', { style: { ...S.barFill, width } }))),
+                        h('div', { style: S.barTrack }, h('div', { style: cx(S.barFill, { width }) }))),
                     h('td', { style: S.td }, formatDuration(project.aiSeconds, lang) ?? tr('metric.pending')),
                     isFiniteNumber(project.humanSeconds)
                         ? h('td', { style: S.td }, formatDuration(project.humanSeconds, lang))
@@ -1122,12 +1405,8 @@
                         h('thead', null,
                             h('tr', null,
                                 h('th', { style: S.thFirst }, tr('col.project')),
-                                h('th', { style: S.th }, tr('col.ai')),
-                                h('th', { style: S.th }, tr('col.human')),
-                                h('th', { style: S.th }, tr('col.total')),
-                                h('th', { style: S.th }, tr('col.lines')),
-                                h('th', { style: S.th }, tr('col.sessions')),
-                                h('th', { style: S.th }, tr('col.lastActive')))),
+                                ['ai', 'human', 'total', 'lines', 'sessions', 'lastActive']
+                                    .map(key => h('th', { key, style: S.th }, tr('col.' + key))))),
                         h('tbody', null,
                             ranked.map((project, index) => h(ProjectRow, {
                                 key: project.project === '' ? 'row-' + index : project.project,
@@ -1166,8 +1445,7 @@
                 const maxAi = aiValues.length > 0 ? Math.max(1, ...aiValues) : 1;
                 const maxHuman = humanValues.length > 0 ? Math.max(1, ...humanValues) : 1;
                 const dense = dates.length > 14;
-                const barHeight = (value, max) => (value > 0 ? Math.max(2, Math.round((value / max) * 54)) + 'px' : '1px');
-                const heatLevel = value => (value > 0 ? Math.min(4, Math.max(1, Math.ceil((value / maxAi) * 4))) : 0);
+                const barHeight = (value, max) => (value > 0 ? Math.max(2, Math.round((value / max) * 128)) + 'px' : '0px');
 
                 return h('section', { style: S.section, 'data-role': 'days' },
                     head,
@@ -1180,8 +1458,8 @@
                             const showTick = !dense || dates.indexOf(date) % 7 === 0 || date === dates[dates.length - 1];
                             if (day === undefined) {
                                 return h('div', { key: date, style: S.dayCol, title: date + ' · ' + tr('days.missing') },
-                                    h('div', { style: { ...S.dayPair, alignItems: 'flex-end' } },
-                                        h('span', { style: { fontSize: '10px', color: C.caption } }, '·')),
+                                    h('div', { style: cx(S.dayPair, { alignItems: 'flex-end' }) },
+                                        h('span', { style: S.dotMissing }, '·')),
                                     h('div', { style: S.dayTick }, showTick ? label : ''));
                             }
                             const ai = isFiniteNumber(day.aiSeconds) ? day.aiSeconds : null;
@@ -1191,35 +1469,83 @@
                                 + ' · ' + tr('days.humanLegend') + ' ' + (formatDuration(human, lang) ?? tr('human.short.not_connected'));
                             return h('div', { key: date, style: S.dayCol, title, 'data-role': 'day-cell', 'data-date': date },
                                 h('div', { style: S.dayPair },
-                                    h('div', { style: { ...S.dayBarAi, height: ai === null ? '0' : barHeight(ai, maxAi) } }),
+                                    h('div', { style: cx(S.dayBarAi, { height: ai === null ? '0' : barHeight(ai, maxAi) }) }),
                                     human !== null && human > 0
-                                        ? h('div', { style: { ...S.dayBarHuman, height: barHeight(human, maxHuman) } })
+                                        ? h('div', { style: cx(S.dayBarHuman, { height: barHeight(human, maxHuman) }) })
                                         : null),
                                 h('div', { style: S.dayTick }, showTick ? label : ''));
                         })),
                     h('div', { style: S.legend },
-                        h('span', null, h('span', { style: { ...S.legendSwatch, background: C.accent } }), tr('days.aiLegend')),
-                        h('span', null, h('span', { style: { ...S.legendSwatch, background: C.borderStrong } }), tr('days.humanLegend'))),
-                    h('div', { style: { ...S.section, gap: '6px' } },
-                        h(SectionHead, { title: tr('heatmap.title'), hint: tr('heatmap.hint') }),
-                        h('div', { style: { ...S.heatGrid, gridTemplateColumns: 'repeat(' + Math.min(dates.length, 14) + ', minmax(0, 1fr))' }, 'data-role': 'heatmap' },
-                            dates.map(date => {
-                                const day = byDate.get(date);
-                                const value = day !== undefined && isFiniteNumber(day.aiSeconds) ? day.aiSeconds : null;
-                                const level = value === null ? 0 : heatLevel(value);
-                                return h('div', {
-                                    key: 'heat-' + date,
-                                    style: S.heatCell,
-                                    title: date + ' · ' + (value === null ? tr('days.missing') : (formatDuration(value, lang) ?? tr('notCollected'))),
-                                    'data-heat': level,
-                                }, level === 0 ? null : h('div', { style: { ...S.heatFill, opacity: String(0.18 + level * 0.2) } }));
-                            })),
-                        h('div', { style: S.legend },
-                            h('span', null, tr('heatmap.low')),
-                            h('span', null, h('span', { style: { ...S.legendSwatch, background: C.accent, opacity: '0.2' } })),
-                            h('span', null, h('span', { style: { ...S.legendSwatch, background: C.accent, opacity: '0.6' } })),
-                            h('span', null, h('span', { style: { ...S.legendSwatch, background: C.accent, opacity: '1' } })),
-                            h('span', null, tr('heatmap.high')))));
+                        h('span', null, h('span', { style: cx(S.legendSwatch, { background: C.accent }) }), tr('days.aiLegend')),
+                        h('span', null, h('span', { style: cx(S.legendSwatch, { background: C.borderStrong }) }), tr('days.humanLegend'))),
+                    h(FileDonut, { files: summary.files, lang, tr }));
+            }
+
+            /**
+             * 按文件活跃时长的环形占比图。
+             *
+             * 数据来自服务端 `files[]`（按证据分摊的真实区间时长）。
+             * `null` = 旧后端未提供 → 明确显示「尚未提供」，绝不本地造一份占比；
+             * 空数组 = 该范围无文件级数据 → 显示空态，不画一个空环冒充数据。
+             */
+            function FileDonut(props = {}) {
+                const { files, lang, tr } = props;
+                const head = h(SectionHead, { title: tr('heatmap.title'), hint: tr('heatmap.hint') });
+                if (files === null || files === undefined) {
+                    return h('div', { style: S.sectionTight, 'data-role': 'heatmap' },
+                        head, h(EmptyState, { title: tr('heatmap.notProvided') }));
+                }
+                if (files.length === 0) {
+                    return h('div', { style: S.sectionTight, 'data-role': 'heatmap' },
+                        head, h(EmptyState, { title: tr('heatmap.empty') }));
+                }
+                const total = files.reduce((sum, item) => sum + (isFiniteNumber(item.totalSeconds) ? item.totalSeconds : 0), 0);
+                if (total <= 0) {
+                    return h('div', { style: S.sectionTight, 'data-role': 'heatmap' },
+                        head, h(EmptyState, { title: tr('heatmap.empty') }));
+                }
+                // conic-gradient 分段：累积百分比 → 起止角度，段间留 1.2deg 细缝增强可读性。
+                const stops = [];
+                let cursor = 0;
+                for (let index = 0; index < files.length; index += 1) {
+                    const item = files[index];
+                    const share = isFiniteNumber(item.totalSeconds) ? item.totalSeconds / total : 0;
+                    const start = cursor * 360;
+                    const end = (cursor + share) * 360;
+                    const color = DONUT_COLORS[index % DONUT_COLORS.length];
+                    stops.push(color + ' ' + start.toFixed(2) + 'deg ' + Math.max(start, end - 1.2).toFixed(2) + 'deg');
+                    cursor += share;
+                }
+                const donutStyle = cx(S.donut, { background: 'conic-gradient(' + stops.join(', ') + ')' });
+                return h('div', { style: S.sectionTight, 'data-role': 'heatmap' },
+                    head,
+                    h('div', { style: S.donutWrap },
+                        h('div', { style: donutStyle, role: 'img', 'aria-label': tr('heatmap.title') },
+                            h('div', { style: S.donutHole },
+                                h('span', { style: S.donutTotalLabel }, tr('heatmap.total')),
+                                h('span', { style: S.donutTotalValue }, compactDuration(total, lang) ?? '—'))),
+                        h('div', { style: S.donutLegend },
+                            files.map((item, index) => {
+                                const seconds = isFiniteNumber(item.totalSeconds) ? item.totalSeconds : 0;
+                                const pct = Math.round((seconds / total) * 100);
+                                const name = item.label !== null && item.label !== '' ? item.label
+                                    : (item.path === '__other__' ? tr('heatmap.other') : (basenameOf(item.path) || item.path || '—'));
+                                return h('div', { key: item.path + ':' + index, style: S.donutRow },
+                                    h('span', { style: cx(S.donutSwatch, { background: DONUT_COLORS[index % DONUT_COLORS.length] }) }),
+                                    h('span', { style: S.donutName, title: item.path }, name),
+                                    h('span', { style: S.donutValue }, formatDuration(seconds, lang) ?? '—'),
+                                    h('span', { style: S.donutShare }, pct + '%'));
+                            }))));
+            }
+
+            /** 最近活动一行的来源标签：绝不把无工具活动编造成某个工具。 */
+            function recentLabel(item, tr) {
+                const tool = typeof item.tool === 'string' ? item.tool : '';
+                const kind = typeof item.kind === 'string' ? item.kind : '';
+                if (tool !== '') return tool; // 真实工具名优先，永远保留。
+                if (kind === 'interval') return tr('recent.interval'); // 有证据的活动区间，不是工具。
+                if (kind === 'evidence') return tr('recent.activity'); // 无工具的证据/活动点，中性显示。
+                return tr('recent.activity');
             }
 
             function RecentList(props = {}) {
@@ -1234,8 +1560,81 @@
                     h('div', { style: S.recent },
                         recent.map((item, index) => h('div', { key: index, style: S.recentRow },
                             h('span', { style: S.recentTime }, formatClock(item.at, summary.timezone, lang) ?? '—'),
-                            h('span', { style: S.recentTool, title: item.kind }, (item.tool === '' ? tr('recent.unknownTool') : item.tool) + (item.kind === '' ? '' : ' · ' + item.kind)),
+                            h('span', { style: S.recentTool, title: item.kind }, recentLabel(item, tr)),
                             h('span', { style: S.recentPath, title: item.path === '' ? item.project : item.path }, item.path === '' ? (basenameOf(item.project) || item.project) : item.path)))));
+            }
+
+
+            /** 只读 Git 工作区文件变更面板；纯展示，不发起请求、不把差异算成工时。 */
+            function WorkingTreePanel(props = {}) {
+                const { workingTree, lang, tr } = props;
+                const head = h(SectionHead, { title: tr('git.title'), hint: tr('git.hint') });
+                const wrap = (children) => h('section', { style: S.section, 'data-role': 'working-tree' }, head, children);
+                if (workingTree === null || workingTree === undefined) {
+                    return wrap(h(EmptyState, { title: tr('git.notProvided') }));
+                }
+                const observed = workingTree.observedAt === '' ? null
+                    : formatDateTime(workingTree.observedAt, null, lang) ?? workingTree.observedAt;
+                const meta = h('div', { style: S.meta },
+                    h('span', null, tr('git.observedAt') + ' ' + (observed ?? '—')),
+                    workingTree.truncated === true ? h('span', { style: S.warnText }, tr('git.truncated')) : null);
+
+                const projects = workingTree.projects;
+                if (projects.length === 0) {
+                    return wrap(h('div', { style: stack(V.gap.md) },
+                        meta, h(EmptyState, { title: tr('git.clean') })));
+                }
+
+                const statusText = (file) => {
+                    const key = 'git.status.' + file.status;
+                    const label = tr(key);
+                    return label === key ? file.status : label;
+                };
+                const lineCell = (file) => {
+                    // binary / 未跟踪 / 无行数证据：null 一律显示「—」，不冒充 0。
+                    if (file.binary === true) return tr('git.binary');
+                    if (file.addedLines === null && file.deletedLines === null) return '—';
+                    const added = file.addedLines === null ? '—' : '+' + file.addedLines;
+                    const deleted = file.deletedLines === null ? '—' : '−' + file.deletedLines;
+                    return added + ' / ' + deleted;
+                };
+                const pathText = (file) => {
+                    if (file.oldPath !== '' && file.oldPath !== file.path) return file.oldPath + ' → ' + file.path;
+                    return file.path;
+                };
+
+                return wrap(h('div', { style: stack(V.gap.xl) },
+                    meta,
+                    projects.map((project, pIndex) => {
+                        let stateLine;
+                        if (project.status === 'not_git') stateLine = tr('git.notGit');
+                        else if (project.status === 'unavailable') stateLine = tr('git.unavailable');
+                        else stateLine = null;
+                        const reason = project.reason !== '' ? h('div', { style: S.sectionHint }, tr('git.reason') + '：' + project.reason) : null;
+                        const table = h('div', { style: S.tableWrap },
+                            h('table', { style: S.table },
+                                h('thead', null,
+                                    h('tr', null,
+                                        h('th', { style: S.thFirst }, tr('git.colPath')),
+                                        h('th', { style: S.th }, tr('git.colStatus')),
+                                        h('th', { style: S.th }, tr('git.colLines')))),
+                                h('tbody', null, project.files.map((file, fIndex) => h('tr', { key: pIndex + ':' + fIndex },
+                                    h('td', { style: S.tdFirst }, pathText(file)),
+                                    h('td', { style: S.td }, statusText(file)),
+                                    h('td', { style: S.tdMuted }, lineCell(file)))))));
+                        if (project.files.length === 0) {
+                            return h('div', { key: pIndex, style: stack(V.gap.sm) },
+                                h('div', { style: S.sectionTitle }, project.project || project.repoRoot || '—'),
+                                h('div', { style: S.sectionHint }, stateLine !== null ? stateLine : tr('git.clean')),
+                                reason);
+                        }
+                        return h('div', { key: pIndex, style: stack(V.gap.sm) },
+                            h('div', { style: S.sectionTitle }, project.project || project.repoRoot || '—'),
+                            stateLine !== null ? h('div', { style: S.sectionHint }, stateLine) : null,
+                            reason,
+                            project.truncated === true ? h('div', { style: S.sectionHint }, tr('git.truncated')) : null,
+                            table);
+                    })));
             }
 
             function SummaryHeader(props = {}) {
@@ -1253,7 +1652,7 @@
                             h('h2', { style: S.title }, tr('title')),
                             h('p', { style: S.subtitle },
                                 rangeTextOf(summary?.range ?? null, preset, lang, tr) + (meta.length > 0 ? ' · ' + meta.join(' · ') : '')),
-                            h('p', { style: { ...S.subtitle, color: C.caption } }, tr('subtitle'))),
+                            h('p', { style: cx(S.subtitle, { color: C.caption }) }, tr('subtitle'))),
                         h('div', { style: S.toolbar },
                             PRESETS.map(item => h(Button, {
                                 key: item,
@@ -1313,10 +1712,10 @@
                         tr,
                     }),
                     state.status === 'loading' && summary === null
-                        ? h('p', { style: { ...S.meta, margin: 0 }, 'data-role': 'summary-loading' }, tr('summary.loading') ?? tr('settings.loading'))
+                        ? h('p', { style: cx(S.meta, { margin: 0 }), 'data-role': 'summary-loading' }, tr('summary.loading') ?? tr('settings.loading'))
                         : null,
                     state.error !== null && summary === null
-                        ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' }, 'data-role': 'summary-error' },
+                        ? h('div', { style: stack(V.gap.lg), 'data-role': 'summary-error' },
                             h(Notice, { tone: 'error', title: tr('summary.error') ?? tr('settings.loadError'), role: 'summary-error-notice' },
                                 describeApiError(state.error, tr)),
                             h('p', { style: S.sectionHint }, tr('error.retryHint')),
@@ -1342,7 +1741,8 @@
                             }))
                         : null,
                     summary !== null ? h(DaySection, { summary, lang, tr }) : null,
-                    summary !== null && props.compact !== true ? h(RecentList, { summary, lang, tr }) : null);
+                    summary !== null && props.compact !== true ? h(RecentList, { summary, lang, tr }) : null,
+                    summary !== null && props.compact !== true ? h(WorkingTreePanel, { workingTree: summary.workingTree, lang, tr }) : null);
             }
 
             /* ------------------------------------------------------------------ *
@@ -1494,6 +1894,24 @@
                 return out;
             }
 
+            /**
+             * 声明式设置字段表。
+             *
+             * `name` 同时是 input id 后缀、data-field、patch key（复合名
+             * `humanTracking.enabled` 例外：它的草稿键是 `humanEnabled`）；
+             * `kind` 决定用数字输入还是复选框。数值范围与 `NUMBER_FIELDS` 对齐。
+             * 新增一个可编辑字段时只改这张表，不再复制一整段 `h(...)` 调用。
+             */
+            const SETTINGS_FIELDS = [
+                { kind: 'check', name: 'enabled', labelKey: 'settings.enabled', hintKey: 'settings.enabledHint', draftKey: 'enabled' },
+                { kind: 'number', name: 'heartbeatIntervalSeconds', labelKey: 'settings.heartbeat', hintKey: 'settings.heartbeatHint', draftKey: 'heartbeatIntervalSeconds', min: 5, max: 3600 },
+                { kind: 'number', name: 'idleThresholdSeconds', labelKey: 'settings.idle', hintKey: 'settings.idleHint', draftKey: 'idleThresholdSeconds', min: 5, max: 86_400 },
+                { kind: 'number', name: 'flushIntervalSeconds', labelKey: 'settings.flush', hintKey: 'settings.flushHint', draftKey: 'flushIntervalSeconds', min: 1, max: 600 },
+                { kind: 'check', name: 'trackAgentActivity', labelKey: 'settings.agent', hintKey: 'settings.agentHint', draftKey: 'trackAgentActivity' },
+                { kind: 'check', name: 'trackAiLines', labelKey: 'settings.lines', hintKey: 'settings.linesHint', draftKey: 'trackAiLines' },
+                { kind: 'check', name: 'humanTracking.enabled', labelKey: 'settings.human', hintKey: 'settings.humanHint', draftKey: 'humanEnabled' },
+            ];
+
             function FieldShell(props = {}) {
                 return h('div', { style: S.formRow, 'data-field': props.name },
                     h('div', { style: S.formLabel },
@@ -1528,7 +1946,7 @@
                         disabled,
                         'aria-invalid': props.error ? 'true' : undefined,
                         onChange: event => props.onChange(coerceNumber(event?.target?.value ?? '')),
-                        style: { ...S.input, ...(disabled ? S.inputDisabled : {}) },
+                        style: cx(S.input, disabled && S.inputDisabled),
                     }),
                     h('span', { style: S.unit }, props.unitLabel),
                     h('span', { style: S.unit }, `(${props.min}..${props.max})`));
@@ -1544,7 +1962,7 @@
                     inputId,
                     error: props.error,
                 },
-                    h('label', { htmlFor: inputId, style: { ...S.checkRow, opacity: disabled ? '0.6' : '1' } },
+                    h('label', { htmlFor: inputId, style: cx(S.checkRow, disabled && S.checkRowDisabled) },
                         h('input', {
                             id: inputId,
                             type: 'checkbox',
@@ -1553,6 +1971,32 @@
                             onChange: event => props.onChange(event?.target?.checked === true),
                         }),
                         h('span', null, props.checked === true ? props.onText : props.offText)));
+            }
+
+            /** 按 `SETTINGS_FIELDS` 的一条描述渲染对应控件；数字/复选框共用一套错误与禁用传参。 */
+            function renderSettingField(field, ctx) {
+                const { tr, draft, shownErrors, fieldDisabled, setField } = ctx;
+                const common = {
+                    name: field.name,
+                    label: tr(field.labelKey),
+                    hint: tr(field.hintKey),
+                    disabled: fieldDisabled(field.name),
+                    error: shownErrors[field.name],
+                    onChange: value => setField(field.draftKey, value),
+                };
+                if (field.kind === 'number') {
+                    return h(NumberField, cx(common, {
+                        value: draft[field.draftKey],
+                        min: field.min,
+                        max: field.max,
+                        unitLabel: tr('settings.seconds'),
+                    }));
+                }
+                return h(CheckboxField, cx(common, {
+                    checked: draft[field.draftKey] === true,
+                    onText: tr('settings.on'),
+                    offText: tr('settings.off'),
+                }));
             }
 
             function statusLineOf(status, dirty, lang, tr) {
@@ -1677,18 +2121,29 @@
                 const statusLine = statusLineOf(status, dirty, lang, tr);
                 const configDisabled = editable === false;
                 const inputDisabled = configDisabled || saving === true;
+                // 冷字段（Host 元数据）：逐字段禁用 + 解释需重载；其余字段照常可编辑。
+                const readonlyFields = entry?.readonlyFields instanceof Set ? entry.readonlyFields : new Set();
+                const restartRequiredFields = entry?.restartRequiredFields instanceof Set ? entry.restartRequiredFields : new Set();
+                const fieldDisabled = (name) => inputDisabled || readonlyFields.has(name);
+                // 只对「表单里真实存在」的冷字段出提示，避免把未知字段名展示给用户。
+                const coldNames = [...restartRequiredFields].filter(name => FIELD_LABEL_KEY[name] !== undefined);
+                const hasColdNotice = editable === true && coldNames.length > 0;
 
                 return h('section', { style: S.block, 'data-role': 'settings' },
                     h('div', { style: S.blockHead },
                         h('h3', { style: S.blockTitle }, tr('settings')),
                         Number.isInteger(entry?.revision) ? h('span', { style: S.badge }, tr('settings.revision') + ' ' + entry.revision) : null,
                         entry?.namespace ? h('span', { style: S.badge }, tr('settings.namespace') + ' ' + entry.namespace) : null,
-                        editable === false ? h('span', { style: { ...S.badge, color: C.warn } }, tr('settings.readonlyBadge')) : null),
+                        editable === false ? h('span', { style: cx(S.badge, S.badgeWarn) }, tr('settings.readonlyBadge')) : null),
                     editable === false
                         ? h(Notice, { tone: 'warn', title: tr('settings.readonly'), role: 'settings-readonly' },
                             Array.isArray(entry?.warnings) && entry.warnings.length > 0
                                 ? tr('settings.readonlyReason') + '：' + entry.warnings.join('；')
                                 : null)
+                        : null,
+                    hasColdNotice
+                        ? h(Notice, { tone: 'warn', title: tr('settings.coldFields'), role: 'settings-cold-fields' },
+                            tr('settings.coldFieldsHint'))
                         : null,
                     Array.isArray(entry?.warnings) && entry.warnings.length > 0
                         ? h(Notice, { tone: 'warn', title: tr('settings.warnings'), items: entry.warnings, role: 'settings-warnings' })
@@ -1696,86 +2151,9 @@
                     config === null
                         ? h(Notice, { tone: 'error', title: tr('settings.unavailable'), role: 'settings-empty' })
                         : h('div', { 'data-role': 'settings-fields' },
-                            h(CheckboxField, {
-                                name: 'enabled',
-                                label: tr('settings.enabled'),
-                                hint: tr('settings.enabledHint'),
-                                checked: draft.enabled === true,
-                                onText: tr('settings.on'),
-                                offText: tr('settings.off'),
-                                disabled: inputDisabled,
-                                error: shownErrors.enabled,
-                                onChange: value => setField('enabled', value),
-                            }),
-                            h(NumberField, {
-                                name: 'heartbeatIntervalSeconds',
-                                label: tr('settings.heartbeat'),
-                                hint: tr('settings.heartbeatHint'),
-                                value: draft.heartbeatIntervalSeconds,
-                                min: 5,
-                                max: 3600,
-                                unitLabel: tr('settings.seconds'),
-                                disabled: inputDisabled,
-                                error: shownErrors.heartbeatIntervalSeconds,
-                                onChange: value => setField('heartbeatIntervalSeconds', value),
-                            }),
-                            h(NumberField, {
-                                name: 'idleThresholdSeconds',
-                                label: tr('settings.idle'),
-                                hint: tr('settings.idleHint'),
-                                value: draft.idleThresholdSeconds,
-                                min: 5,
-                                max: 86_400,
-                                unitLabel: tr('settings.seconds'),
-                                disabled: inputDisabled,
-                                error: shownErrors.idleThresholdSeconds,
-                                onChange: value => setField('idleThresholdSeconds', value),
-                            }),
-                            h(NumberField, {
-                                name: 'flushIntervalSeconds',
-                                label: tr('settings.flush'),
-                                hint: tr('settings.flushHint'),
-                                value: draft.flushIntervalSeconds,
-                                min: 1,
-                                max: 600,
-                                unitLabel: tr('settings.seconds'),
-                                disabled: inputDisabled,
-                                error: shownErrors.flushIntervalSeconds,
-                                onChange: value => setField('flushIntervalSeconds', value),
-                            }),
-                            h(CheckboxField, {
-                                name: 'trackAgentActivity',
-                                label: tr('settings.agent'),
-                                hint: tr('settings.agentHint'),
-                                checked: draft.trackAgentActivity === true,
-                                onText: tr('settings.on'),
-                                offText: tr('settings.off'),
-                                disabled: inputDisabled,
-                                error: shownErrors.trackAgentActivity,
-                                onChange: value => setField('trackAgentActivity', value),
-                            }),
-                            h(CheckboxField, {
-                                name: 'trackAiLines',
-                                label: tr('settings.lines'),
-                                hint: tr('settings.linesHint'),
-                                checked: draft.trackAiLines === true,
-                                onText: tr('settings.on'),
-                                offText: tr('settings.off'),
-                                disabled: inputDisabled,
-                                error: shownErrors.trackAiLines,
-                                onChange: value => setField('trackAiLines', value),
-                            }),
-                            h(CheckboxField, {
-                                name: 'humanTracking.enabled',
-                                label: tr('settings.human'),
-                                hint: tr('settings.humanHint'),
-                                checked: draft.humanEnabled === true,
-                                onText: tr('settings.on'),
-                                offText: tr('settings.off'),
-                                disabled: inputDisabled,
-                                error: shownErrors['humanTracking.enabled'],
-                                onChange: value => setField('humanEnabled', value),
-                            }),
+                            SETTINGS_FIELDS.map(field => renderSettingField(field, {
+                                tr, draft, shownErrors, fieldDisabled, setField,
+                            })),
                             h('div', { style: S.formRow, 'data-field': 'storageDirectory' },
                                 h('div', { style: S.formLabel },
                                     h('span', { style: S.formLabelText }, tr('settings.storage')),
@@ -1786,7 +2164,7 @@
                         ? h(Notice, { tone: 'error', title: tr('settings.invalidLocal'), items: extraFieldErrors, role: 'settings-field-errors' })
                         : null,
                     statEntries(entry?.stats).length > 0
-                        ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
+                        ? h('div', { style: col('5px') },
                             h('div', { style: S.sectionTitle }, tr('settings.stats')),
                             h('div', { style: S.statGrid },
                                 statEntries(entry.stats).map(([key, value]) => h('div', { key, style: S.statItem },
@@ -1846,7 +2224,7 @@
                 const ai = totals === null ? null : formatDuration(totals.aiSeconds, lang);
                 const label = ai === null ? tr('header.aiToday') : tr('header.aiToday') + ' ' + ai;
 
-                return h('div', { style: { position: 'relative', display: 'inline-block' } },
+                return h('div', { style: S.headerAnchor },
                     h('button', {
                         type: 'button',
                         'aria-haspopup': 'dialog',
@@ -1854,10 +2232,13 @@
                         'aria-label': open ? tr('header.close') : tr('header.open'),
                         title: open ? tr('header.close') : label,
                         onClick: () => setOpen(value => !value),
-                        style: { ...S.headerButton, ...(open ? { color: C.accent, borderColor: C.borderStrong } : {}) },
-                    }, '⏱ ' + label),
+                        style: cx(S.headerButton, open && S.headerButtonOpen),
+                    },
+                        h('span', { style: S.headerIcon }, '◷'),
+                        h('span', { style: S.headerLabel }, label)),
                     open
                         ? h('div', { style: S.popover, role: 'dialog', 'aria-label': tr('header.title'), 'data-role': 'header-popover' },
+                            h('div', { style: S.popoverAccentBar }),
                             h('div', { style: S.popoverHead },
                                 h('h4', { style: S.popoverTitle }, tr('header.title')),
                                 h(Button, { ariaLabel: tr('header.close'), onClick: () => setOpen(false) }, '×')),
@@ -1869,10 +2250,9 @@
                                 : null,
                             totals === null
                                 ? null
-                                : h('div', { style: { display: 'flex', flexDirection: 'column' } },
-                                    h('div', { style: S.popoverRow },
-                                        h('span', { style: S.popoverKey }, tr('metric.ai')),
-                                        h('span', { style: S.popoverValue }, formatDuration(totals.aiSeconds, lang) ?? tr('metric.pending'))),
+                                : h('div', { style: col(V.gap.sm) },
+                                    h('div', { style: S.popoverHeroLabel }, tr('metric.ai')),
+                                    h('div', { style: S.popoverHero }, formatDuration(totals.aiSeconds, lang) ?? tr('metric.pending')),
                                     h('div', { style: S.popoverRow },
                                         h('span', { style: S.popoverKey }, tr('metric.human')),
                                         h('span', { style: S.popoverValue }, humanTextOf(totals.humanSeconds, state.data.humanStatus, lang, tr))),
@@ -1883,10 +2263,19 @@
                                 ? h('p', { style: S.popoverHint }, tr('header.empty'))
                                 : null,
                             state.data !== null && state.data.projects.length > 0
-                                ? h('div', { style: { display: 'flex', flexDirection: 'column' } },
-                                    state.data.projects.slice(0, 3).map(project => h('div', { key: project.project, style: S.popoverRow },
-                                        h('span', { style: { ...S.popoverKey, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: project.cwd }, project.label),
-                                        h('span', { style: S.popoverValue }, formatDuration(project.aiSeconds, lang) ?? tr('metric.pending')))))
+                                ? (() => {
+                                    const top = state.data.projects.slice(0, 3);
+                                    const max = Math.max(1, ...top.map(p => (isFiniteNumber(p.aiSeconds) ? p.aiSeconds : 0)));
+                                    return h('div', { style: col(V.gap.sm) },
+                                        top.map(project => {
+                                            const value = isFiniteNumber(project.aiSeconds) ? project.aiSeconds : 0;
+                                            const width = Math.max(value > 0 ? 4 : 0, Math.round((value / max) * 100)) + '%';
+                                            return h('div', { key: project.project, style: S.popoverProjectRow },
+                                                h('span', { style: S.popoverProjectName, title: project.cwd }, project.label),
+                                                h('span', { style: S.popoverProjectBar }, h('span', { style: cx(S.popoverProjectFill, { width, display: 'block' }) })),
+                                                h('span', { style: S.popoverProjectValue }, formatDuration(project.aiSeconds, lang) ?? tr('metric.pending')));
+                                        }));
+                                })()
                                 : null,
                             h('p', { style: S.popoverHint }, tr('header.hint')),
                             h(Button, { ariaLabel: tr('refresh'), onClick: refresh }, state.refreshing === true ? tr('refreshing') : tr('refresh')))
@@ -1905,10 +2294,10 @@
                 return h('div', { style: S.root, 'data-dsh-coding-time': 'dashboard' },
                     h(SummaryRegion, { preset: props.preset ?? 'today', compact: props.compact === true }),
                     state.status === 'loading' && state.entry === null
-                        ? h('p', { style: { ...S.meta, margin: 0 }, 'data-role': 'config-loading' }, tr('settings.loading'))
+                        ? h('p', { style: cx(S.meta, { margin: 0 }), 'data-role': 'config-loading' }, tr('settings.loading'))
                         : null,
                     state.error !== null && state.entry === null
-                        ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' }, 'data-role': 'config-error' },
+                        ? h('div', { style: stack(V.gap.lg), 'data-role': 'config-error' },
                             h(Notice, { tone: 'error', title: tr('settings.loadError'), role: 'config-error-notice' }, describeApiError(state.error, tr)),
                             h(Button, { ariaLabel: tr('settings.retry'), onClick: reload }, tr('settings.retry')))
                         : null,
@@ -1929,9 +2318,9 @@
                 const { state } = useSummary('today');
                 const totals = state.data?.totals ?? null;
                 const ai = totals === null ? null : formatDuration(totals.aiSeconds, lang);
-                return h('p', { style: { ...S.meta, margin: 0 }, 'data-role': 'bundle-summary' },
+                return h('p', { style: cx(S.meta, { margin: 0 }), 'data-role': 'bundle-summary' },
                     h('span', null, tr('bundle.summary') + ' '),
-                    h('strong', { style: { color: C.text, fontVariantNumeric: 'tabular-nums', fontWeight: 600 } }, ai ?? tr('metric.pending')),
+                    h('strong', { style: S.strongNumber }, ai ?? tr('metric.pending')),
                     h('span', null, ' · ' + tr('bundle.note')));
             }
 
@@ -1948,6 +2337,28 @@
 
             function registrationLabel(key) {
                 return () => translator(langOf())(key);
+            }
+
+            /**
+             * 设置侧边栏导航图标（`settings.section.icon`）。
+             *
+             * 宿主契约：注册 id 必须等于 `settings.section` 的 id，否则不渲染；
+             * 组件收到 `{ size, active }`，shell 拥有按钮/标签/装饰性图标容器；
+             * 不注册时宿主对未知 id 渲染默认齿轮。这里复用会话头的蓝色品牌方块，
+             * 让两个入口的图标一致；符号保持 ◷（计时），不改协议、不引外部资源。
+             */
+            function BrandIcon(props = {}) {
+                const size = isFiniteNumber(props.size) && props.size > 0 ? props.size : 16;
+                const glyphSize = Math.max(8, Math.round(size * 0.62));
+                return h('span', {
+                    style: cx(S.brandIcon, {
+                        width: size + 'px',
+                        height: size + 'px',
+                        fontSize: glyphSize + 'px',
+                        boxShadow: props.active === true ? '0 0 0 2px ' + C.accentGlow : undefined,
+                    }),
+                    'aria-hidden': 'true',
+                }, '◷');
             }
 
             /**
@@ -1999,6 +2410,11 @@
                         order: 64,
                         label: registrationLabel('nav'),
                     }, CodingTimeSection);
+                    // 同 id 的导航图标：替换宿主给未知 id 的默认齿轮。
+                    register(SLOT_SETTINGS_ICON, {
+                        name: SLOT_SETTINGS_ICON,
+                        id: SEAT_ID,
+                    }, BrandIcon);
                     // 插件页里的本包配置区（keyed 到包名）。
                     register(SLOT_BUNDLE_CONFIG, {
                         name: SLOT_BUNDLE_CONFIG,

@@ -8,7 +8,7 @@
  * 设计边界（与消费者一致，别绕过）：
  *
  * - 零第三方依赖，仅 node 内建；**无 HTTP 监听、无网络、无账号/token/费用**，
- *   不是 WakaTime，不调用任何第三方 API/CLI，不注册第三方服务。
+ *   不调用任何第三方 API/CLI，不注册第三方服务。
  * - 原子写：先写 `.tmp` 临时文件，再 `rename` 成 `<id>.json`；重复 id 不覆盖
  *   （幂等，交给 tracker 按稳定 id 去重）。
  * - 事件只含最小元数据：`id,cwd,file,sessionId/editorInstanceId,runId,at,

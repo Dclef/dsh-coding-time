@@ -26,9 +26,12 @@ import {
     readLineEvidence,
     readLineMeta,
     resolveCandidatePath,
+    dayKeyStartMs,
     resolveRange,
+    shiftDayKey,
     splitByDay,
     unionMs,
+    weekdayOfDayKey,
 } from '../lib/collector.js';
 
 const CWD = 'C:\\proj';
@@ -348,6 +351,71 @@ test('localDayKey 与 resolveRange', () => {
     const today = resolveRange({ preset: 'today' }, 'Asia/Shanghai', nowMs);
     assert.equal(today.fromLocal, '2026-11-05');
     assert.equal(resolveRange({ preset: 'all' }, 'Asia/Shanghai', nowMs).fromLocal, '1970-01-01');
+});
+
+test('resolveRange 的 week 真的按 weekStartsOn 计算（周日 vs 周一）', () => {
+    // 2026-11-05 是周四。本周：
+    //   周一=11-02，周日=11-01。
+    const nowMs = Date.parse('2026-11-05T02:00:00.000Z'); // 10:00 +08 周四
+    const monday = resolveRange({ preset: 'week' }, 'Asia/Shanghai', nowMs, 1);
+    const sunday = resolveRange({ preset: 'week' }, 'Asia/Shanghai', nowMs, 0);
+    assert.equal(monday.fromLocal, '2026-11-02', '周一开头应回到 11-02');
+    assert.equal(sunday.fromLocal, '2026-11-01', '周日开头应回到 11-01');
+    // toLocal 都是"今天"，但 to(exclusive) 必须是下一天本地零点。
+    assert.equal(monday.toLocal, '2026-11-05');
+    assert.equal(monday.to, new Date(dayKeyStartMs('2026-11-06', 'Asia/Shanghai')).toISOString());
+    // 不同起点必须产生不同范围（证明字段真的生效）。
+    assert.notEqual(monday.fromLocal, sunday.fromLocal);
+    assert.equal(monday.weekStartsOn, 1);
+    assert.equal(sunday.weekStartsOn, 0);
+});
+
+test('当周起始日就是今天时 fromLocal 不动', () => {
+    // 2026-11-02 是周一，周一开头 → 起始就是当天。
+    const mondayNowMs = Date.parse('2026-11-02T02:00:00.000Z');
+    assert.equal(resolveRange({ preset: 'week' }, 'Asia/Shanghai', mondayNowMs, 1).fromLocal, '2026-11-02');
+    // 2026-11-01 是周日，周日开头 → 起始就是当天。
+    const sundayNowMs = Date.parse('2026-11-01T02:00:00.000Z');
+    assert.equal(resolveRange({ preset: 'week' }, 'Asia/Shanghai', sundayNowMs, 0).fromLocal, '2026-11-01');
+});
+
+test('跨 DST 的周起点不被 24h 减法算错（America/New_York 2026 春令时）', () => {
+    // 2026-03-08 是 DST 开始日（美国东部 3/8 凌晨进入夏令时）。
+    // 那天只有 23 小时：用固定 86400000 减会算错日期。
+    const nowMs = Date.parse('2026-03-09T16:00:00.000Z'); // 3/9 12:00 EDT
+    const week = resolveRange({ preset: 'week' }, 'America/New_York', nowMs, 1);
+    assert.equal(week.fromLocal, '2026-03-09', '周一开头，3/9 本身就是周一 → 不应回退');
+    assert.equal(week.toLocal, '2026-03-09');
+    // 结束边界必须落在 3/10 的本地零点（EDT），不能因为 +24h 变成 3/9 或 3/11。
+    const expectedTo = dayKeyStartMs('2026-03-10', 'America/New_York');
+    assert.equal(week.to, new Date(expectedTo).toISOString());
+    // 3/9 的本地日跨度是 24h（DST 已在 3/8 切换完）；验证真实边界而非常量。
+    const spanMs = Date.parse(week.to) - Date.parse(week.from);
+    assert.ok(spanMs > 0 && spanMs <= 25 * 3600 * 1000, `跨度必须合理，实际 ${spanMs}`);
+});
+
+test('UTC+14 极东时区：日键与周起点不串日', () => {
+    // Pacific/Kiritimati 常年 UTC+14，本地日期比 UTC 早一天。
+    const nowMs = Date.parse('2026-11-05T12:00:00.000Z'); // 本地 11-06 02:00（周五）
+    assert.equal(localDayKey(nowMs, 'Pacific/Kiritimati'), '2026-11-06');
+    const week = resolveRange({ preset: 'week' }, 'Pacific/Kiritimati', nowMs, 1);
+    assert.equal(week.toLocal, '2026-11-06');
+    assert.equal(week.fromLocal, '2026-11-02', '周五、周一开头 → 回到 11-02');
+    assert.equal(week.to, new Date(dayKeyStartMs('2026-11-07', 'Pacific/Kiritimati')).toISOString());
+    // 周日开头则是 11-01。
+    assert.equal(resolveRange({ preset: 'week' }, 'Pacific/Kiritimati', nowMs, 0).fromLocal, '2026-11-01');
+});
+
+test('shiftDayKey / weekdayOfDayKey 稳定性', () => {
+    assert.equal(shiftDayKey('2026-11-05', -4), '2026-11-01');
+    assert.equal(shiftDayKey('2026-11-05', 1), '2026-11-06');
+    assert.equal(shiftDayKey('2026-01-01', -1), '2025-12-31', '跨年');
+    assert.equal(shiftDayKey('2026-03-01', -1), '2026-02-28', '跨月');
+    // 2026-11-05 是周四 (4)，2026-11-01 是周日 (0)。
+    assert.equal(weekdayOfDayKey('2026-11-05', 'Asia/Shanghai'), 4);
+    assert.equal(weekdayOfDayKey('2026-11-01', 'Asia/Shanghai'), 0);
+    assert.equal(weekdayOfDayKey('2026-11-01', 'Pacific/Kiritimati'), 0, 'UTC+14 本地周日');
+    assert.equal(weekdayOfDayKey('2026-11-02', 'Pacific/Kiritimati'), 1, 'UTC+14 本地周一');
 });
 
 test('enumerateDays 有上限', () => {
