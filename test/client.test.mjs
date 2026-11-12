@@ -1456,3 +1456,162 @@ test('环形图：files 里时长为 0 / 非数字 / 负数一律被归一丢弃
     assert.doesNotMatch(text, /zero\.js|neg\.js|str\.js/, '无效时长项不得进入占比图');
     assert.doesNotMatch(text, /undefined|\bnull\b|NaN/);
 });
+
+/* -------------------------------------------------------------------------- *
+ * 格式化缓存：实例复用、参数隔离、失败不缓存、有界淘汰
+ * -------------------------------------------------------------------------- */
+
+/**
+ * 在独立 vm 沙箱里重新加载一次客户端源码，拿到「冷缓存」的 __test。
+ *
+ * 该沙箱的 Intl 换成计数 stub：包住真实构造器并记录构造次数，保留原型与
+ * supportedLocalesOf 静态方法，行为与原生一致；restore() 把 Intl 换回原对象。
+ */
+function loadFreshClient() {
+    const definitions = [];
+    const realIntl = Intl;
+    const counts = { number: 0, dateTime: 0 };
+    const stubIntl = {
+        NumberFormat: function CountingNumberFormat(...args) {
+            counts.number += 1;
+            return new realIntl.NumberFormat(...args);
+        },
+        DateTimeFormat: function CountingDateTimeFormat(...args) {
+            counts.dateTime += 1;
+            return new realIntl.DateTimeFormat(...args);
+        },
+    };
+    stubIntl.NumberFormat.prototype = realIntl.NumberFormat.prototype;
+    stubIntl.NumberFormat.supportedLocalesOf = realIntl.NumberFormat.supportedLocalesOf;
+    stubIntl.DateTimeFormat.prototype = realIntl.DateTimeFormat.prototype;
+    stubIntl.DateTimeFormat.supportedLocalesOf = realIntl.DateTimeFormat.supportedLocalesOf;
+    const localSandbox = {
+        window: { __ModuleLoader__: { load(definition) { definitions.push(definition); } } },
+        console,
+        Intl: stubIntl,
+    };
+    const localContext = vm.createContext(localSandbox);
+    vm.runInContext(clientSource, localContext, { filename: 'client/index.js' });
+    const localModule = definitions[0].factory(() => ({ createElement: () => null }));
+    return {
+        test: localModule.__test,
+        counts,
+        restore() {
+            localSandbox.Intl = realIntl;
+        },
+    };
+}
+
+test('格式化缓存：同参复用、语言/时区隔离，输出与原生一致', () => {
+    assert.equal(typeof definition.factory(() => ({ createElement: () => null })).__test.formatDateTime, 'function',
+        'formatDateTime 必须出现在 __test 导出里');
+
+    const fresh = loadFreshClient();
+    try {
+        const { test: t, counts } = fresh;
+        const iso = '2026-11-05T01:20:00.000Z';
+        const nativeDate = (locale, timezone) => new Intl.DateTimeFormat(locale, {
+            timeZone: timezone,
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+        }).format(new Date(Date.parse(iso)));
+
+        // 数字：同语言重复调用只构造一次
+        assert.equal(t.formatNumber(1234.5, 'zh'), new Intl.NumberFormat('zh-CN').format(1234.5));
+        assert.equal(counts.number, 1);
+        assert.equal(t.formatNumber(9876, 'zh'), new Intl.NumberFormat('zh-CN').format(9876));
+        assert.equal(counts.number, 1, '同语言必须复用同一个 NumberFormat');
+
+        // 换语言必须另建实例，输出与原生一致
+        assert.equal(t.formatNumber(1234.5, 'en'), new Intl.NumberFormat('en-US').format(1234.5));
+        assert.equal(counts.number, 2);
+        assert.equal(t.formatNumber(1234.5, 'en'), new Intl.NumberFormat('en-US').format(1234.5));
+        assert.equal(counts.number, 2);
+
+        // 日期时间：同语言 + 同时区只构造一次
+        const shanghai = t.formatDateTime(iso, 'Asia/Shanghai', 'zh');
+        assert.equal(shanghai, nativeDate('zh-CN', 'Asia/Shanghai'));
+        assert.equal(counts.dateTime, 1);
+        assert.equal(t.formatDateTime(iso, 'Asia/Shanghai', 'zh'), shanghai);
+        assert.equal(counts.dateTime, 1, '同语言同时区必须复用');
+
+        // 换时区不能串缓存
+        const tokyo = t.formatDateTime(iso, 'Asia/Tokyo', 'zh');
+        assert.equal(counts.dateTime, 2);
+        assert.equal(tokyo, nativeDate('zh-CN', 'Asia/Tokyo'));
+        assert.notEqual(shanghai, tokyo, '不同时区必须给出不同结果');
+
+        // 换语言不能串缓存
+        const english = t.formatDateTime(iso, 'Asia/Shanghai', 'en');
+        assert.equal(counts.dateTime, 3);
+        assert.equal(english, nativeDate('en-US', 'Asia/Shanghai'));
+
+        // 空时区与 undefined/null 共用「本地时区」这一个槽位
+        const local = t.formatDateTime(iso, undefined, 'zh');
+        assert.equal(counts.dateTime, 4);
+        assert.equal(local, nativeDate('zh-CN', undefined));
+        assert.equal(t.formatDateTime(iso, '', 'zh'), local);
+        assert.equal(t.formatDateTime(iso, null, 'zh'), local);
+        assert.equal(counts.dateTime, 4, '空时区必须与本地时区共用实例');
+
+        // 非法时区：保持原 fallback，且失败构造不进缓存
+        const fallback = iso.slice(0, 16).replace('T', ' ');
+        assert.equal(t.formatDateTime(iso, 'Not/AZone', 'zh'), fallback);
+        const afterFirstFailure = counts.dateTime;
+        assert.equal(t.formatDateTime(iso, 'Not/AZone', 'zh'), fallback);
+        assert.equal(counts.dateTime, afterFirstFailure + 1, '失败构造不能被缓存');
+        assert.equal(t.formatDateTime(iso, 'Asia/Shanghai', 'zh'), shanghai);
+        assert.equal(counts.dateTime, afterFirstFailure + 1, '失败不能污染已成功的缓存');
+
+        // 空值 / 非法时间语义不变，且完全不构造格式化器
+        const before = { ...counts };
+        assert.equal(t.formatNumber(null, 'zh'), null);
+        assert.equal(t.formatNumber(undefined, 'zh'), null);
+        assert.equal(t.formatNumber(Number.NaN, 'zh'), null);
+        assert.equal(t.formatNumber('12', 'zh'), null);
+        assert.equal(t.formatDateTime(null, 'Asia/Shanghai', 'zh'), null);
+        assert.equal(t.formatDateTime('', 'Asia/Shanghai', 'zh'), null);
+        assert.equal(t.formatDateTime(undefined, 'Asia/Shanghai', 'zh'), null);
+        assert.equal(t.formatDateTime('nope', 'Asia/Shanghai', 'zh'), 'nope');
+        sameJson(counts, before, '空值/非法时间不应触发实例构造');
+    }
+    finally {
+        fresh.restore();
+    }
+});
+
+test('格式化缓存有界：超过 32 项按插入顺序淘汰最旧', () => {
+    const zones = [
+        'UTC', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Singapore', 'Asia/Kolkata',
+        'Asia/Dubai', 'Asia/Bangkok', 'Asia/Jakarta', 'Asia/Hong_Kong', 'Asia/Taipei', 'Asia/Manila',
+        'Asia/Karachi', 'Asia/Tehran', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Madrid',
+        'Europe/Rome', 'Europe/Moscow', 'Europe/Warsaw', 'Europe/Stockholm', 'Europe/Lisbon', 'Europe/Athens',
+        'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Toronto',
+        'America/Sao_Paulo', 'America/Mexico_City', 'Australia/Sydney', 'Pacific/Auckland',
+    ];
+    assert.equal(zones.length, 33, '用例需要 33 个不同时区才越过 32 项上限');
+    const fresh = loadFreshClient();
+    try {
+        const { test: t, counts } = fresh;
+        const iso = '2026-11-05T01:20:00.000Z';
+        for (const zone of zones) {
+            assert.equal(t.formatDateTime(iso, zone, 'en'),
+                new Intl.DateTimeFormat('en-US', {
+                    timeZone: zone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+                }).format(new Date(Date.parse(iso))));
+        }
+        assert.equal(counts.dateTime, 33, '33 个不同时区各构造一次');
+        // 第 33 次写入时最旧项被淘汰：再取要重新构造
+        t.formatDateTime(iso, zones[0], 'en');
+        assert.equal(counts.dateTime, 34, '超出上限后最旧项必须已被淘汰');
+        // 最近写入的仍在缓存里
+        t.formatDateTime(iso, zones[32], 'en');
+        assert.equal(counts.dateTime, 34, '缓存内的项仍应命中，不应无限增长');
+    }
+    finally {
+        fresh.restore();
+    }
+});

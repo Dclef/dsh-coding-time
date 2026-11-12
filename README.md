@@ -59,7 +59,7 @@ collected" or "not connected"), never as a fabricated `0`.
 From npm:
 
 ```
-npm install dsh-coding-time@0.1.0
+npm install dsh-coding-time@0.1.1
 dsh plugin --profile web add dsh-coding-time
 ```
 
@@ -91,6 +91,11 @@ See [docs/INSTALL.md](docs/INSTALL.md) for details.
 `idleThresholdSeconds` must be at least `heartbeatIntervalSeconds`. Unknown
 fields, credential fields, invalid numbers, invalid timezones and non-absolute
 directories are rejected rather than silently clamped.
+
+## What's new in 0.1.1
+
+- Reuses cached `Intl.NumberFormat` and `Intl.DateTimeFormat` instances in the dashboard.
+- Keeps cache entries separate by locale and timezone, preserves invalid-input fallbacks, and caps each cache at 32 entries.
 
 ## Development
 

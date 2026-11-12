@@ -752,10 +752,59 @@
                 return String(value).padStart(2, '0');
             }
 
+            /* ------------------------------------------------------------------ *
+             * 格式化器缓存
+             *
+             * Intl.*Format 的构造比一次 format() 贵一个量级，而面板每次渲染都要格式化
+             * 几十个数字与时间点。语言只有 zh/en，时区来自配置，键的组合数天然很少，
+             * 所以按 key 缓存实例：命中直接复用，未命中才构造。
+             *
+             * 上限固定为 32 项，超出时按 Map 的插入顺序淘汰最旧的一项（不记 LRU）；
+             * 构造抛错时 factory 直接抛出，失败结果不会写进缓存。
+             * ------------------------------------------------------------------ */
+
+            /** 格式化器缓存上限（键是「语言」或「语言+时区」，正常远用不到这么多）。 */
+            const FORMATTER_CACHE_LIMIT = 32;
+
+            /** 有界缓存的通用取用：命中返回，未命中构造并写入，满了先淘汰最旧项。 */
+            function cachedFormatter(cache, key, factory) {
+                const hit = cache.get(key);
+                if (hit !== undefined) return hit;
+                const formatter = factory();
+                if (cache.size >= FORMATTER_CACHE_LIMIT) {
+                    const oldest = cache.keys().next();
+                    if (oldest.done !== true) cache.delete(oldest.value);
+                }
+                cache.set(key, formatter);
+                return formatter;
+            }
+
+            /** NumberFormat 按 locale 缓存。 */
+            const numberFormats = new Map();
+
+            /** DateTimeFormat 按 locale + 有效时区缓存（键用 \u0000 分隔，避免拼接歧义）。 */
+            const dateTimeFormats = new Map();
+
+            function numberFormatOf(locale) {
+                return cachedFormatter(numberFormats, locale, () => new Intl.NumberFormat(locale));
+            }
+
+            function dateTimeFormatOf(locale, timezone) {
+                const zone = typeof timezone === 'string' && timezone !== '' ? timezone : '';
+                return cachedFormatter(dateTimeFormats, locale + '\u0000' + zone, () => new Intl.DateTimeFormat(locale, {
+                    timeZone: zone === '' ? undefined : zone,
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                }));
+            }
+
             function formatNumber(value, lang) {
                 if (!isFiniteNumber(value)) return null;
                 try {
-                    return new Intl.NumberFormat(lang === 'en' ? 'en-US' : 'zh-CN').format(value);
+                    return numberFormatOf(lang === 'en' ? 'en-US' : 'zh-CN').format(value);
                 }
                 catch {
                     return String(value);
@@ -807,14 +856,7 @@
                 const ms = Date.parse(iso);
                 if (!Number.isFinite(ms)) return iso;
                 try {
-                    return new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'zh-CN', {
-                        timeZone: typeof timezone === 'string' && timezone !== '' ? timezone : undefined,
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                    }).format(new Date(ms));
+                    return dateTimeFormatOf(lang === 'en' ? 'en-US' : 'zh-CN', timezone).format(new Date(ms));
                 }
                 catch {
                     return iso.slice(0, 16).replace('T', ' ');
@@ -2462,6 +2504,7 @@
                     normalizePreset,
                     formatDuration,
                     formatNumber,
+                    formatDateTime,
                     formatBytes,
                     normalizeSummary,
                     normalizeConfigEntry,

@@ -60,8 +60,10 @@ npm pack --dry-run                         # 离线核对 tarball 内容
 `/summary` HTTP 路由，不 mock `summarize`；以及本地编辑器协议用例
 （`test/editor-inbox.test.mjs`）。
 
-**最终验证记录 2026-11-07（v0.1.0 发版）：** `npm run check` →
-`check ok: 10 files`；`npm test` → **220 用例 / 219 通过 / 0 失败 / 1 skip**。
+**最终验证记录 2026-11-12（v0.1.1 发版）：** `npm run check` →
+`check ok: 10 files`；`npm test` → **222 用例 / 221 通过 / 0 失败 / 1 skip**。
+本版本为看板的数字与日期格式化器增加有界缓存，按语言与时区隔离，未改变计时、
+行数或缺失值口径。
 唯一 skip 是 Windows 上的 POSIX 权限用例。请在你的平台重跑 `npm test` 取当前数字。
 
 **验收记录 2026-11-05（本 checkout 的历史过程）：** 会话早期未安装、本地 Web
@@ -77,12 +79,12 @@ GUI 需认证（401）；此后已安装到本机 `desktop` profile，后端与�
 `README.zh.md`、`LICENSE` 打进 tarball（以你的版本实际执行结果为准，
 `package.json` 的 `files` 数组已列这些条目）。`test/` 仅用于开发，不在发布包内。
 
-已发布版本也可直接从 npm 或 GitHub Release 安装（v0.1.0 对应
-`dsh-coding-time-0.1.0.tgz`）：
+已发布版本也可直接从 npm 或 GitHub Release 安装（v0.1.1 对应
+`dsh-coding-time-0.1.1.tgz`）：
 
 ```
-npm install dsh-coding-time@0.1.0
-dsh plugin --profile web add 'https://github.com/Dclef/dsh-coding-time/releases/download/v0.1.0/dsh-coding-time-0.1.0.tgz'
+npm install dsh-coding-time@0.1.1
+dsh plugin --profile web add 'https://github.com/Dclef/dsh-coding-time/releases/download/v0.1.1/dsh-coding-time-0.1.1.tgz'
 ```
 
 ## 4. 本地编辑器接入协议（供宿主 / 编辑器集成方）

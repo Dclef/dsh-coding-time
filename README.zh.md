@@ -51,7 +51,7 @@ Node 内建模块；设置表单使用宿主提供的 `@deepseek-ai/schemastery`
 从 npm 安装：
 
 ```
-npm install dsh-coding-time@0.1.0
+npm install dsh-coding-time@0.1.1
 dsh plugin --profile web add dsh-coding-time
 ```
 
@@ -82,6 +82,11 @@ Harness 实例。详见 [docs/INSTALL.md](docs/INSTALL.md)。
 
 `idleThresholdSeconds` 不得小于 `heartbeatIntervalSeconds`。未知字段、凭据
 字段、非法数值 / 时区、非绝对目录一律报错，而不是静默修正。
+
+## 0.1.1 更新
+
+- 看板复用缓存的 `Intl.NumberFormat` 与 `Intl.DateTimeFormat`，减少重复构造开销。
+- 缓存按语言与时区隔离，保留非法输入的回退行为，每类最多保留 32 项。
 
 ## 开发
 
